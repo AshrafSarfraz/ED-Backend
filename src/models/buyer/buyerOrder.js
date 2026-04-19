@@ -11,12 +11,21 @@ const buyerOrderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "in_bidding", "won", "delivered", "cancelled"],
+      enum: ["pending", "in_bidding", "won", "delivered", "cancelled", "return_requested", "returned"],
       default: "pending",
     },
 
+    // ─── Delivery Address ─────────────────────────
+    deliveryAddress: {
+      lat:     { type: Number, default: null },
+      lng:     { type: Number, default: null },
+      address: { type: String, default: null },
+      area:    { type: String, default: null },
+      city:    { type: String, default: null },
+    },
+    packedStatus: { type: Boolean, default: false },
     bulkOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "BulkOrder", default: null },
-    bidDate:     { type: Date, default: null }, // kis din ki bidding mein jayega
+    bidDate:     { type: Date, default: null },
   },
   { timestamps: true }
 );

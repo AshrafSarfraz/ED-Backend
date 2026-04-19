@@ -1,10 +1,11 @@
 const cron = require("node-cron");
-const BuyerOrder = require("../models/buyer/buyerOrder");
-const BulkOrder  = require("../models/BulkOrder");
-const Bid        = require("../models/Bid");
-const Branch     = require("../models/branch");
+const BuyerOrder   = require("../models/buyer/buyerOrder");
+const BulkOrder    = require("../models/BulkOrder");
+const Bid          = require("../models/Bid");
+const Branch       = require("../models/branch");
 const PlatformItem = require("../models/PlatformItem");
 const Country      = require("../models/Country");
+const Invoice      = require("../models/invoice"); // ← naya
 const {
   sendNoBidEmail,
   sendOrderCancelledEmail,
@@ -84,22 +85,18 @@ cron.schedule("0 22 * * *", async () => {
 
     for (const bulkOrder of activeBulkOrders) {
 
-      // Item aur country info
       const platformItem = await PlatformItem.findById(bulkOrder.platformItemId);
       const country      = await Country.findById(bulkOrder.countryId);
 
-      // Lowest bid dhundo
       const winningBid = await Bid.findOne({ bulkOrderId: bulkOrder._id })
         .sort({ pricePerUnit: 1 });
 
       // ─── No bid ───────────────────────────────
       if (!winningBid) {
 
-        // 3 din ho gaye → cancel
         if (bulkOrder.retryCount >= 3) {
           await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
 
-          // Buyers ko cancel email bhejo
           const buyerOrders = await BuyerOrder.find({
             _id: { $in: bulkOrder.buyerOrderIds }
           }).populate("buyerBranchId");
@@ -118,7 +115,6 @@ cron.schedule("0 22 * * *", async () => {
           console.log(`❌ 3 din ho gaye — BulkOrder ${bulkOrder._id} cancelled`);
 
         } else {
-          // Next day ke liye reschedule
           const tomorrow = new Date();
           tomorrow.setHours(0, 0, 0, 0);
           tomorrow.setDate(tomorrow.getDate() + 1);
@@ -127,18 +123,16 @@ cron.schedule("0 22 * * *", async () => {
           nextBiddingEndsAt.setHours(22, 0, 0, 0);
 
           await BulkOrder.findByIdAndUpdate(bulkOrder._id, {
-            retryCount:   bulkOrder.retryCount + 1,
-            bidDate:      tomorrow,
+            retryCount:    bulkOrder.retryCount + 1,
+            bidDate:       tomorrow,
             biddingEndsAt: nextBiddingEndsAt,
           });
 
-          // BuyerOrders pending karo next day ke liye
           await BuyerOrder.updateMany(
             { _id: { $in: bulkOrder.buyerOrderIds } },
             { status: "pending", bidDate: tomorrow }
           );
 
-          // Buyers ko no-bid email bhejo
           const buyerOrders = await BuyerOrder.find({
             _id: { $in: bulkOrder.buyerOrderIds }
           }).populate("buyerBranchId");
@@ -173,7 +167,7 @@ cron.schedule("0 22 * * *", async () => {
         { status: "lost" }
       );
 
-      // Buyers ko won email bhejo
+      // Buyers ko won email bhejo + Invoice generate karo
       const buyerOrders = await BuyerOrder.find({
         _id: { $in: bulkOrder.buyerOrderIds }
       }).populate("buyerBranchId");
@@ -182,6 +176,33 @@ cron.schedule("0 22 * * *", async () => {
         const branch      = bo.buyerBranchId;
         const totalAmount = bo.quantity * winningBid.pricePerUnit;
 
+        // ─── Invoice Generate ──────────────────
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + 30);
+
+        const count         = await Invoice.countDocuments();
+        const invoiceNumber = `INV-${new Date().toISOString().slice(0,10).replace(/-/g,"")}-${String(count + 1).padStart(4, "0")}`;
+
+        await Invoice.create({
+          buyerOrderId:     bo._id,
+          bulkOrderId:      bulkOrder._id,
+          buyerBranchId:    branch._id,
+          buyerCompanyId:   bo.buyerCompanyId,
+          supplierBranchId: winningBid.supplierBranchId,
+          platformItemId:   bulkOrder.platformItemId,
+          countryId:        bulkOrder.countryId,
+          invoiceNumber,
+          quantity:         bo.quantity,
+          unit:             platformItem?.unit,
+          pricePerUnit:     winningBid.pricePerUnit,
+          totalAmount,
+          amountDue:        totalAmount,
+          dueDate,
+        });
+
+        console.log(`🧾 Invoice generated: ${invoiceNumber}`);
+
+        // ─── Email ─────────────────────────────
         await sendOrderWonEmail({
           toEmail:      branch.email,
           managerName:  branch.managerName,

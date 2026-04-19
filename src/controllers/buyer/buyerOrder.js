@@ -1,14 +1,19 @@
-const BuyerOrder = require("../../models/buyer/buyerOrder");
+const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const PlatformItem = require("../../models/PlatformItem");
-const Country = require("../../models/Country");
+const Country      = require("../../models/Country");
+const Invoice      = require("../../models/Invoice");
 
+// ═══════════════════════════════════════════════════════
+//  BUYER — Place Order
+//  POST /api/buyer/orders/place
+// ═══════════════════════════════════════════════════════
 exports.placeOrder = async (req, res) => {
   try {
     if (req.branch.accountType !== "Buyer") {
       return res.status(403).json({ success: false, message: "Only buyers can place orders" });
     }
 
-    const { platformItemId, countryId, quantity } = req.body;
+    const { platformItemId, countryId, quantity, deliveryAddress } = req.body;
 
     if (!platformItemId || !countryId || !quantity) {
       return res.status(400).json({ success: false, message: "platformItemId, countryId, quantity required" });
@@ -24,7 +29,7 @@ exports.placeOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Country not found" });
     }
 
-    const now = new Date();
+    const now   = new Date();
     const hours = now.getUTCHours() + 3;
     if (hours >= 18) {
       return res.status(400).json({
@@ -42,6 +47,7 @@ exports.placeOrder = async (req, res) => {
       platformItemId,
       countryId,
       quantity,
+      deliveryAddress: deliveryAddress || null,
       bidDate,
     });
 
@@ -74,6 +80,121 @@ exports.getMyOrders = async (req, res) => {
     res.json({ success: true, total: orders.length, data: orders });
   } catch (err) {
     console.error("getMyOrders error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+//  BUYER — Cancel Order
+//  PUT /api/buyer/orders/:orderId/cancel
+// ═══════════════════════════════════════════════════════
+exports.cancelOrder = async (req, res) => {
+  try {
+    if (req.branch.accountType !== "Buyer") {
+      return res.status(403).json({ success: false, message: "Only buyers can cancel orders" });
+    }
+
+    const order = await BuyerOrder.findOne({
+      _id:           req.params.orderId,
+      buyerBranchId: req.branch._id,
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const cancellableStatuses = ["pending", "in_bidding", "won"];
+    if (!cancellableStatuses.includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order cancel nahi ho sakta — status: ${order.status}`,
+      });
+    }
+
+    // Agar won hai toh dispatched check karo
+    if (order.status === "won") {
+      const invoice = await Invoice.findOne({ buyerOrderId: order._id });
+      if (invoice && invoice.deliveryStatus === "dispatched") {
+        return res.status(400).json({
+          success: false,
+          message: "Order already dispatched — cancel nahi ho sakta",
+        });
+      }
+
+      if (invoice) {
+        await Invoice.findByIdAndUpdate(invoice._id, {
+          deliveryStatus: "cancelled",
+          paymentStatus:  "unpaid",
+        });
+      }
+    }
+
+    await BuyerOrder.findByIdAndUpdate(order._id, { status: "cancelled" });
+
+    res.json({ success: true, message: "Order cancelled successfully" });
+  } catch (err) {
+    console.error("cancelOrder error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+//  BUYER — Return Request
+//  PUT /api/buyer/orders/:orderId/return
+// ═══════════════════════════════════════════════════════
+exports.returnOrder = async (req, res) => {
+  try {
+    if (req.branch.accountType !== "Buyer") {
+      return res.status(403).json({ success: false, message: "Only buyers can request return" });
+    }
+
+    const { reason } = req.body;
+    if (!reason) {
+      return res.status(400).json({ success: false, message: "Return reason required" });
+    }
+
+    const order = await BuyerOrder.findOne({
+      _id:           req.params.orderId,
+      buyerBranchId: req.branch._id,
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.status !== "delivered") {
+      return res.status(400).json({
+        success: false,
+        message: "Sirf delivered orders return ho sakte hain",
+      });
+    }
+
+    // 24 hours check
+    const invoice = await Invoice.findOne({ buyerOrderId: order._id });
+    if (!invoice || !invoice.deliveredAt) {
+      return res.status(400).json({ success: false, message: "Delivery info nahi mili" });
+    }
+
+    const now         = new Date();
+    const deliveredAt = new Date(invoice.deliveredAt);
+    const hoursPassed = (now - deliveredAt) / (1000 * 60 * 60);
+
+    if (hoursPassed > 24) {
+      return res.status(400).json({
+        success: false,
+        message: "Return window closed — sirf 24 hours andar return ho sakta hai",
+      });
+    }
+
+    await BuyerOrder.findByIdAndUpdate(order._id, { status: "return_requested" });
+    await Invoice.findByIdAndUpdate(invoice._id, {
+      deliveryStatus: "returned",
+      returnReason:   reason,
+    });
+
+    res.json({ success: true, message: "Return request submitted — supplier will review it" });
+  } catch (err) {
+    console.error("returnOrder error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

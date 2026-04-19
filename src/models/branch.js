@@ -92,6 +92,13 @@ const branchSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    warehouseAddress: {
+      lat:     { type: Number, default: null },
+      lng:     { type: Number, default: null },
+      address: { type: String, default: null },
+      area:    { type: String, default: null },
+      city:    { type: String, default: null },
+    },
 
     // ─── Step 0.3 — Catalog (Supplier Only) ───────────────
     // Items are stored in a separate Item/Catalog model

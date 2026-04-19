@@ -10,7 +10,7 @@ const bulkOrderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["bidding", "awarded", "cancelled"],
+      enum: ["bidding", "awarded","ready", "cancelled"],
       default: "bidding",
     },
 
