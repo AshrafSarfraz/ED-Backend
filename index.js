@@ -13,16 +13,16 @@ app.use(express.urlencoded({ extended: true }));
 
 
 
-app.use("/api/becomePartner",require("./src/routes/becomePartner") );
-app.use("/api/company",        require("./src/routes/company"));
-app.use("/api/branch",        require("./src/routes/branchRoutes"));
-app.use("/api/countries",     require("./src/routes/countryRoutes"));
-app.use("/api/categories",    require("./src/routes/categoryRoutes"));
-app.use("/api/items",         require("./src/routes/platformItemRoutes"));
-app.use("/api/catalog",       require("./src/routes/supplier/supplierCatalogRoutes"));
-app.use("/api/buyer/catalog", require("./src/routes/buyer/catalog"));
-app.use("/api/buyer/orders",  require("./src/routes/buyer/buyerOrder"));
-app.use("/api/supplier/bids", require("./src/routes/supplier/bids"));
+app.use("/api/becomePartner",   require("./src/routes/becomePartner") );
+app.use("/api/company",         require("./src/routes/company"));
+app.use("/api/branch",          require("./src/routes/branchRoutes"));
+app.use("/api/countries",       require("./src/routes/countryRoutes"));
+app.use("/api/categories",      require("./src/routes/categoryRoutes"));
+app.use("/api/items",           require("./src/routes/platformItemRoutes"));
+app.use("/api/catalog",         require("./src/routes/supplier/supplierCatalogRoutes"));
+app.use("/api/buyer/catalog",   require("./src/routes/buyer/catalog"));
+app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
+app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
 app.use("/api/rider-company",   require("./src/routes/rider/riderCompany"));
 app.use("/api/rider",           require("./src/routes/rider/rider"));

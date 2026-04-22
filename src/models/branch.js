@@ -50,10 +50,11 @@ const branchSchema = new mongoose.Schema(
 
     // ─── Step 0.2 Fields ──────────────────────────────────
     address: {
-      type: String,
-      default: null,
-      // For Supplier: warehouse address
-      // For Buyer: business/delivery address
+      lat:     { type: Number, default: null },
+      lng:     { type: Number, default: null },
+      address: { type: String, default: null },
+      area:    { type: String, default: null },
+      city:    { type: String, default: null },
     },
 
     bankDetails: {

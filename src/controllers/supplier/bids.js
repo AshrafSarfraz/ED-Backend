@@ -1,5 +1,5 @@
-const Bid        = require("../../models/Bid");
-const BulkOrder  = require("../../models/BulkOrder");
+const Bid          = require("../../models/Bid");
+const BulkOrder    = require("../../models/BulkOrder");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
 const PlatformItem = require("../../models/PlatformItem");
 const Country      = require("../../models/Country");
@@ -7,7 +7,6 @@ const Country      = require("../../models/Country");
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Active Biddings dekho
 //  GET /api/supplier/bids/active
-//  Auth: Supplier Token
 // ═══════════════════════════════════════════════════════
 exports.getActiveBiddings = async (req, res) => {
   try {
@@ -15,10 +14,9 @@ exports.getActiveBiddings = async (req, res) => {
       return res.status(403).json({ success: false, message: "Only suppliers can access this" });
     }
 
-    // Supplier ke items dhundo
     const supplierItems = await SupplierItem.find({
-      branchId:        req.branch._id,
-      isListed:        true,
+      branchId:         req.branch._id,
+      isListed:         true,
       isAvailableToday: true,
     });
 
@@ -26,17 +24,13 @@ exports.getActiveBiddings = async (req, res) => {
       return res.json({ success: true, total: 0, data: [] });
     }
 
-    // Supplier ke platformItemId + countryId combinations
     const combinations = supplierItems.map(item => ({
       platformItemId: item.platformItemId.toString(),
       countryId:      item.countryId.toString(),
     }));
 
-    // Active BulkOrders dhundo
-    const now = new Date();
     const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
 
-    // Sirf woh BulkOrders jo supplier sell karta hai
     const eligibleOrders = activeBulkOrders.filter(bulk =>
       combinations.some(
         c =>
@@ -45,19 +39,16 @@ exports.getActiveBiddings = async (req, res) => {
       )
     );
 
-    // Populate karo
     const result = await Promise.all(
       eligibleOrders.map(async (bulk) => {
         const platformItem = await PlatformItem.findById(bulk.platformItemId).select("name image unit");
         const country      = await Country.findById(bulk.countryId).select("name code");
 
-        // Supplier ki existing bid check karo
         const myBid = await Bid.findOne({
           bulkOrderId:      bulk._id,
           supplierBranchId: req.branch._id,
         });
 
-        // Lowest bid abhi tak
         const lowestBid = await Bid.findOne({ bulkOrderId: bulk._id })
           .sort({ pricePerUnit: 1 });
 
@@ -70,6 +61,8 @@ exports.getActiveBiddings = async (req, res) => {
           countryCode:   country?.code,
           totalQuantity: bulk.totalQuantity,
           biddingEndsAt: bulk.biddingEndsAt,
+          minPrice:      bulk.minPrice,   // ← add
+          maxPrice:      bulk.maxPrice,   // ← add
           myBid:         myBid ? myBid.pricePerUnit : null,
           lowestBid:     lowestBid ? lowestBid.pricePerUnit : null,
           alreadyBid:    !!myBid,
@@ -87,7 +80,6 @@ exports.getActiveBiddings = async (req, res) => {
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Bid lagao
 //  POST /api/supplier/bids/place
-//  Auth: Supplier Token
 // ═══════════════════════════════════════════════════════
 exports.placeBid = async (req, res) => {
   try {
@@ -101,23 +93,29 @@ exports.placeBid = async (req, res) => {
       return res.status(400).json({ success: false, message: "bulkOrderId and pricePerUnit required" });
     }
 
-    // BulkOrder check
     const bulkOrder = await BulkOrder.findById(bulkOrderId);
     if (!bulkOrder || bulkOrder.status !== "bidding") {
       return res.status(404).json({ success: false, message: "Bidding not found or already closed" });
     }
 
-    // Bidding time check — 6PM-10PM only
-    const now        = new Date();
-    const hours      = now.getUTCHours() + 3; // Qatar time
-    if (hours < 18 || hours >= 22) {
+    // ─── Max price check ──────────────────────────────
+    if (bulkOrder.maxPrice && pricePerUnit > bulkOrder.maxPrice) {
       return res.status(400).json({
         success: false,
-        message: "Bidding is only allowed between 6:00 PM and 10:00 PM",
+        message: `Bid price cannot exceed maximum price of ${bulkOrder.maxPrice} QAR/${bulkOrder.unit || "unit"}`,
       });
     }
 
-    // Supplier is item ko sell karta hai check
+    // ─── Bidding time check ───────────────────────────
+    // const now   = new Date();
+    // const hours = now.getUTCHours() + 3;
+    // if (hours < 18 || hours >= 22) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Bidding is only allowed between 6:00 PM and 10:00 PM",
+    //   });
+    // }
+
     const supplierItem = await SupplierItem.findOne({
       branchId:       req.branch._id,
       platformItemId: bulkOrder.platformItemId,
@@ -132,17 +130,14 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // Already bid kiya check
     const existingBid = await Bid.findOne({
       bulkOrderId:      bulkOrderId,
       supplierBranchId: req.branch._id,
     });
 
     if (existingBid) {
-      // Update existing bid
       existingBid.pricePerUnit = pricePerUnit;
       await existingBid.save();
-
       return res.json({
         success: true,
         message: "Bid updated successfully",
@@ -150,7 +145,6 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // Naya bid create karo
     const bid = await Bid.create({
       bulkOrderId,
       supplierBranchId:  req.branch._id,
@@ -172,7 +166,6 @@ exports.placeBid = async (req, res) => {
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — My Bids dekho
 //  GET /api/supplier/bids/my-bids
-//  Auth: Supplier Token
 // ═══════════════════════════════════════════════════════
 exports.getMyBids = async (req, res) => {
   try {
@@ -197,8 +190,11 @@ exports.getMyBids = async (req, res) => {
           unit:          platformItem?.unit,
           country:       country?.name,
           totalQuantity: bulk.totalQuantity,
+          minPrice:      bulk.minPrice,  // ← add
+          maxPrice:      bulk.maxPrice,  // ← add
           myPrice:       bid.pricePerUnit,
-          status:        bid.status,  // pending / won / lost
+          status:        bid.status,
+          winningPrice:  bulk.winningPrice,
           biddingEndsAt: bulk.biddingEndsAt,
         };
       })

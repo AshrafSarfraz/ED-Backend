@@ -7,7 +7,9 @@ const bulkOrderSchema = new mongoose.Schema(
     countryId:        { type: mongoose.Schema.Types.ObjectId, ref: "Country",      required: true },
     totalQuantity:    { type: Number, required: true },
     buyerOrderIds:    [{ type: mongoose.Schema.Types.ObjectId, ref: "BuyerOrder" }],
-
+    minPrice: { type: Number, default: null }, // ← min supplier price
+    maxPrice: { type: Number, default: null }, // ← max supplier price
+  
     status: {
       type: String,
       enum: ["bidding", "awarded","ready", "cancelled"],

@@ -88,22 +88,34 @@ exports.addBranch = async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 exports.completeProfile = async (req, res) => {
   try {
-    const { address, bankDetails } = req.body;
+    const { address, bankDetails, warehouseAddress } = req.body;
 
     if (!address) {
       return res.status(400).json({ success: false, message: "Address is required" });
     }
 
-    if (!bankDetails?.accountName || !bankDetails?.accountNumber || !bankDetails?.iban || !bankDetails?.bankName) {
+    if (!bankDetails?.accountName || !bankDetails?.accountNumber || 
+        !bankDetails?.iban || !bankDetails?.bankName) {
       return res.status(400).json({
         success: false,
-        message: "Complete bank details are required (accountName, accountNumber, iban, bankName)",
+        message: "Complete bank details are required",
       });
+    }
+
+    const updateData = {
+      address,      // ← object: { lat, lng, address, area, city }
+      bankDetails,
+      registrationStep: 2,
+    };
+
+    // Supplier ke liye warehouseAddress
+    if (req.branch.accountType === "Supplier" && warehouseAddress) {
+      updateData.warehouseAddress = warehouseAddress;
     }
 
     const branch = await Branch.findByIdAndUpdate(
       req.branch._id,
-      { address, bankDetails, registrationStep: 2 },
+      updateData,
       { new: true, runValidators: true }
     ).select("-password");
 

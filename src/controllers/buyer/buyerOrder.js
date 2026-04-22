@@ -1,12 +1,13 @@
 const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const PlatformItem = require("../../models/PlatformItem");
 const Country      = require("../../models/Country");
-const Invoice      = require("../../models/Invoice");
+const Invoice      = require("../../models/invoice");
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Place Order
 //  POST /api/buyer/orders/place
 // ═══════════════════════════════════════════════════════
+
 exports.placeOrder = async (req, res) => {
   try {
     if (req.branch.accountType !== "Buyer") {
@@ -14,6 +15,15 @@ exports.placeOrder = async (req, res) => {
     }
 
     const { platformItemId, countryId, quantity, deliveryAddress } = req.body;
+   
+    const finalDeliveryAddress = deliveryAddress || {
+      lat:     req.branch.address?.lat,
+      lng:     req.branch.address?.lng,
+      address: req.branch.address?.address,
+      area:    req.branch.address?.area,
+      city:    req.branch.address?.city,
+    };
+    
 
     if (!platformItemId || !countryId || !quantity) {
       return res.status(400).json({ success: false, message: "platformItemId, countryId, quantity required" });
@@ -47,7 +57,7 @@ exports.placeOrder = async (req, res) => {
       platformItemId,
       countryId,
       quantity,
-      deliveryAddress: deliveryAddress || null,
+      deliveryAddress: finalDeliveryAddress,
       bidDate,
     });
 
