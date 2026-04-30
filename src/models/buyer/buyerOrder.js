@@ -26,6 +26,7 @@ const buyerOrderSchema = new mongoose.Schema(
     packedStatus: { type: Boolean, default: false },
     bulkOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "BulkOrder", default: null },
     bidDate:     { type: Date, default: null },
+    estimatedAmount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

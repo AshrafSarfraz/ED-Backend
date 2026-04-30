@@ -106,15 +106,7 @@ exports.placeBid = async (req, res) => {
       });
     }
 
-    // ─── Bidding time check ───────────────────────────
-    // const now   = new Date();
-    // const hours = now.getUTCHours() + 3;
-    // if (hours < 18 || hours >= 22) {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message: "Bidding is only allowed between 6:00 PM and 10:00 PM",
-    //   });
-    // }
+   
 
     const supplierItem = await SupplierItem.findOne({
       branchId:       req.branch._id,
@@ -179,7 +171,11 @@ exports.getMyBids = async (req, res) => {
 
     const result = await Promise.all(
       bids.map(async (bid) => {
-        const bulk         = bid.bulkOrderId;
+        const bulk = bid.bulkOrderId;
+
+        // ← null check add karo
+        if (!bulk) return null;
+
         const platformItem = await PlatformItem.findById(bulk.platformItemId).select("name unit");
         const country      = await Country.findById(bulk.countryId).select("name");
 
@@ -190,8 +186,8 @@ exports.getMyBids = async (req, res) => {
           unit:          platformItem?.unit,
           country:       country?.name,
           totalQuantity: bulk.totalQuantity,
-          minPrice:      bulk.minPrice,  // ← add
-          maxPrice:      bulk.maxPrice,  // ← add
+          minPrice:      bulk.minPrice,
+          maxPrice:      bulk.maxPrice,
           myPrice:       bid.pricePerUnit,
           status:        bid.status,
           winningPrice:  bulk.winningPrice,
@@ -200,7 +196,10 @@ exports.getMyBids = async (req, res) => {
       })
     );
 
-    res.json({ success: true, total: result.length, data: result });
+    // ← null filter karo
+    const filtered = result.filter(item => item !== null);
+
+    res.json({ success: true, total: filtered.length, data: filtered });
   } catch (err) {
     console.error("getMyBids error:", err);
     res.status(500).json({ success: false, message: "Server error" });

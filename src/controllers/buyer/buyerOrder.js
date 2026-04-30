@@ -2,12 +2,59 @@ const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const PlatformItem = require("../../models/PlatformItem");
 const Country      = require("../../models/Country");
 const Invoice      = require("../../models/invoice");
+const Branch       = require("../../models/branch");
+const SupplierItem = require("../../models/supplier/supplierCatalog");
+const mongoose     = require("mongoose");
+
+const BIDDING_START_HOUR = 14;
+const CANCEL_CUTOFF_MIN  = 2;
+
+const getQatarNow = () => {
+  const now = new Date();
+  return new Date(now.getTime() + 3 * 60 * 60 * 1000);
+};
+
+const getTodayBiddingStart = () => {
+  const start = new Date();
+  start.setUTCHours(BIDDING_START_HOUR - 3, 0, 0, 0);
+  return start;
+};
+
+const getTomorrowBiddingStart = () => {
+  const start = getTodayBiddingStart();
+  start.setDate(start.getDate() + 1);
+  return start;
+};
+
+const getUsedPDC = async (branchId) => {
+  const branchObjectId = new mongoose.Types.ObjectId(branchId);
+
+  const pendingOrders = await BuyerOrder.aggregate([
+    {
+      $match: {
+        buyerBranchId: branchObjectId,
+        status: { $in: ["pending", "in_bidding", "won"] },
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$estimatedAmount" } } },
+  ]);
+
+  const unpaidInvoices = await Invoice.aggregate([
+    {
+      $match: {
+        buyerBranchId: branchObjectId,
+        paymentStatus: { $in: ["unpaid", "partial", "overdue"] },
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$amountDue" } } },
+  ]);
+
+  return (pendingOrders[0]?.total || 0) + (unpaidInvoices[0]?.total || 0);
+};
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Place Order
-//  POST /api/buyer/orders/place
 // ═══════════════════════════════════════════════════════
-
 exports.placeOrder = async (req, res) => {
   try {
     if (req.branch.accountType !== "Buyer") {
@@ -15,18 +62,20 @@ exports.placeOrder = async (req, res) => {
     }
 
     const { platformItemId, countryId, quantity, deliveryAddress } = req.body;
-   
-    const finalDeliveryAddress = deliveryAddress || {
-      lat:     req.branch.address?.lat,
-      lng:     req.branch.address?.lng,
-      address: req.branch.address?.address,
-      area:    req.branch.address?.area,
-      city:    req.branch.address?.city,
-    };
-    
 
     if (!platformItemId || !countryId || !quantity) {
-      return res.status(400).json({ success: false, message: "platformItemId, countryId, quantity required" });
+      return res.status(400).json({
+        success: false,
+        message: "platformItemId, countryId, and quantity are required",
+      });
+    }
+
+    const buyerBranch = await Branch.findById(req.branch._id);
+    if (!buyerBranch.pdcAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Your PDC limit has not been set. Please contact the admin.",
+      });
     }
 
     const platformItem = await PlatformItem.findById(platformItemId);
@@ -39,32 +88,102 @@ exports.placeOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Country not found" });
     }
 
-    const now   = new Date();
-    const hours = now.getUTCHours() + 3;
-    if (hours >= 18) {
+    const supplierItems = await SupplierItem.find({
+      platformItemId,
+      countryId,
+      isListed:         true,
+      isAvailableToday: true,
+    });
+
+    if (supplierItems.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Order window closed. Please order before 6:00 PM for tomorrow's bidding",
+        message: "No suppliers available for this item.",
       });
     }
 
-    const bidDate = new Date();
-    bidDate.setHours(0, 0, 0, 0);
+    const prices          = supplierItems.map((s) => s.pricePerUnit);
+    const maxPrice        = Math.max(...prices);
+    const estimatedAmount = maxPrice * quantity;
+
+    const usedAmount      = await getUsedPDC(req.branch._id);
+    const remainingAmount = buyerBranch.pdcAmount - usedAmount;
+
+    if (remainingAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Your PDC limit is fully utilized. Please clear your pending dues first.",
+        data: {
+          pdcLimit:  buyerBranch.pdcAmount,
+          used:      usedAmount,
+          remaining: 0,
+        },
+      });
+    }
+
+    if (estimatedAmount > remainingAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient PDC. Estimated: ${estimatedAmount} QAR | Remaining: ${remainingAmount} QAR`,
+        data: {
+          pdcLimit:            buyerBranch.pdcAmount,
+          used:                usedAmount,
+          remaining:           remainingAmount,
+          estimatedAmount,
+          maxQuantityCanOrder: Math.floor(remainingAmount / maxPrice),
+        },
+      });
+    }
+
+    const qatarNow  = getQatarNow();
+    const qatarHour = qatarNow.getUTCHours();
+
+    let bidDate, biddingMessage, biddingDateStr;
+
+    if (qatarHour < BIDDING_START_HOUR) {
+      bidDate        = getTodayBiddingStart();
+      biddingDateStr = "Today";
+      biddingMessage = "Order added to today's bidding. Bidding: 2:00 PM – 3:00 PM";
+    } else {
+      bidDate        = getTomorrowBiddingStart();
+      biddingDateStr = "Tomorrow";
+      biddingMessage = "Order will be in tomorrow's bidding. Bidding: 2:00 PM – 3:00 PM";
+    }
+
+    const finalDeliveryAddress = deliveryAddress || {
+      lat:     buyerBranch.address?.lat,
+      lng:     buyerBranch.address?.lng,
+      address: buyerBranch.address?.address,
+      area:    buyerBranch.address?.area,
+      city:    buyerBranch.address?.city,
+    };
 
     const order = await BuyerOrder.create({
-      buyerBranchId:  req.branch._id,
-      buyerCompanyId: req.branch.companyId,
+      buyerBranchId:   req.branch._id,
+      buyerCompanyId:  req.branch.companyId,
       platformItemId,
       countryId,
       quantity,
       deliveryAddress: finalDeliveryAddress,
       bidDate,
+      estimatedAmount,
     });
 
     res.status(201).json({
       success: true,
-      message: "Order placed! It will be included in today's bidding at 6:00 PM",
-      data: order,
+      message: biddingMessage,
+      data: {
+        ...order.toObject(),
+        biddingDay:   biddingDateStr,
+        biddingStart: "2:00 PM",
+        biddingEnd:   "3:00 PM",
+        pdcInfo: {
+          pdcLimit:        buyerBranch.pdcAmount,
+          used:            usedAmount + estimatedAmount,
+          remaining:       remainingAmount - estimatedAmount,
+          estimatedAmount,
+        },
+      },
     });
   } catch (err) {
     console.error("placeOrder error:", err);
@@ -74,7 +193,6 @@ exports.placeOrder = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Get My Orders
-//  GET /api/buyer/orders/my-orders
 // ═══════════════════════════════════════════════════════
 exports.getMyOrders = async (req, res) => {
   try {
@@ -96,7 +214,6 @@ exports.getMyOrders = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Cancel Order
-//  PUT /api/buyer/orders/:orderId/cancel
 // ═══════════════════════════════════════════════════════
 exports.cancelOrder = async (req, res) => {
   try {
@@ -113,35 +230,35 @@ exports.cancelOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    const cancellableStatuses = ["pending", "in_bidding", "won"];
-    if (!cancellableStatuses.includes(order.status)) {
+    if (order.status !== "pending") {
       return res.status(400).json({
         success: false,
-        message: `Order cancel nahi ho sakta — status: ${order.status}`,
+        message: order.status === "in_bidding"
+          ? "Bidding in progress — cannot cancel"
+          : `Cannot cancel — status: ${order.status}`,
       });
     }
 
-    // Agar won hai toh dispatched check karo
-    if (order.status === "won") {
-      const invoice = await Invoice.findOne({ buyerOrderId: order._id });
-      if (invoice && invoice.deliveryStatus === "dispatched") {
-        return res.status(400).json({
-          success: false,
-          message: "Order already dispatched — cancel nahi ho sakta",
-        });
-      }
+    const biddingStart = new Date(order.bidDate);
+    const cancelCutoff = new Date(biddingStart.getTime() - CANCEL_CUTOFF_MIN * 60 * 1000);
 
-      if (invoice) {
-        await Invoice.findByIdAndUpdate(invoice._id, {
-          deliveryStatus: "cancelled",
-          paymentStatus:  "unpaid",
-        });
-      }
+    if (new Date() >= cancelCutoff) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot cancel — bidding starts in less than 2 minutes",
+      });
     }
 
-    await BuyerOrder.findByIdAndUpdate(order._id, { status: "cancelled" });
+    // ← PDC turant free
+    await BuyerOrder.findByIdAndUpdate(order._id, {
+      status:          "cancelled",
+      estimatedAmount: 0,
+    });
 
-    res.json({ success: true, message: "Order cancelled successfully" });
+    res.json({
+      success: true,
+      message: "Order cancelled. PDC amount has been released.",
+    });
   } catch (err) {
     console.error("cancelOrder error:", err);
     res.status(500).json({ success: false, message: "Server error" });
@@ -150,17 +267,20 @@ exports.cancelOrder = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Return Request
-//  PUT /api/buyer/orders/:orderId/return
 // ═══════════════════════════════════════════════════════
 exports.returnOrder = async (req, res) => {
   try {
     if (req.branch.accountType !== "Buyer") {
-      return res.status(403).json({ success: false, message: "Only buyers can request return" });
+      return res.status(403).json({ success: false, message: "Only buyers can request a return" });
     }
 
     const { reason } = req.body;
-    if (!reason) {
-      return res.status(400).json({ success: false, message: "Return reason required" });
+    const validReasons = ["incorrect", "damaged", "rotten", "expired"];
+    if (!reason || !validReasons.includes(reason)) {
+      return res.status(400).json({
+        success: false,
+        message: "Return reason must be: incorrect, damaged, rotten, or expired",
+      });
     }
 
     const order = await BuyerOrder.findOne({
@@ -175,34 +295,34 @@ exports.returnOrder = async (req, res) => {
     if (order.status !== "delivered") {
       return res.status(400).json({
         success: false,
-        message: "Sirf delivered orders return ho sakte hain",
+        message: "Only delivered orders can be returned",
       });
     }
 
-    // 24 hours check
     const invoice = await Invoice.findOne({ buyerOrderId: order._id });
     if (!invoice || !invoice.deliveredAt) {
-      return res.status(400).json({ success: false, message: "Delivery info nahi mili" });
+      return res.status(400).json({ success: false, message: "Delivery info not found" });
     }
 
-    const now         = new Date();
-    const deliveredAt = new Date(invoice.deliveredAt);
-    const hoursPassed = (now - deliveredAt) / (1000 * 60 * 60);
-
+    const hoursPassed = (new Date() - new Date(invoice.deliveredAt)) / (1000 * 60 * 60);
     if (hoursPassed > 24) {
       return res.status(400).json({
         success: false,
-        message: "Return window closed — sirf 24 hours andar return ho sakta hai",
+        message: "Return window closed — only within 24 hours of delivery",
       });
     }
 
+    // ← Sirf request submit — PDC tab free hogi jab supplier accept kare
     await BuyerOrder.findByIdAndUpdate(order._id, { status: "return_requested" });
     await Invoice.findByIdAndUpdate(invoice._id, {
       deliveryStatus: "returned",
       returnReason:   reason,
     });
 
-    res.json({ success: true, message: "Return request submitted — supplier will review it" });
+    res.json({
+      success: true,
+      message: "Return request submitted. PDC will be released after supplier approval.",
+    });
   } catch (err) {
     console.error("returnOrder error:", err);
     res.status(500).json({ success: false, message: "Server error" });

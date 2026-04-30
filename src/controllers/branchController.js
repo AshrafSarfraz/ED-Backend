@@ -3,6 +3,7 @@ const Company = require("../models/createCompany");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const generateTempPassword = require("../utils/generatePassword");
+const { uploadToFirebase } = require("../config/uploadToFirebase");
 const {
   sendBranchCredentialsEmail,
   sendBranchApprovalEmail,
@@ -132,6 +133,73 @@ exports.completeProfile = async (req, res) => {
   }
 };
 
+exports.uploadContract = async (req, res) => {
+  try {
+    const branch = await Branch.findById(req.params.id);
+    if (!branch) {
+      return res.status(404).json({ success: false, message: "Branch not found" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Contract PDF is required" });
+    }
+
+    const url = await uploadToFirebase(
+      req.file.buffer,
+      req.file.originalname,
+      `contracts/${branch._id}`
+    );
+
+    await Branch.findByIdAndUpdate(branch._id, { contractPdf: url });
+
+    res.json({ success: true, message: "Contract uploaded", data: { contractPdf: url } });
+  } catch (err) {
+    console.error("uploadContract error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.uploadPdc = async (req, res) => {
+  try {
+    const branch = await Branch.findById(req.params.id);
+    if (!branch) {
+      return res.status(404).json({ success: false, message: "Branch not found" });
+    }
+
+    if (branch.accountType !== "Buyer") {
+      return res.status(403).json({ success: false, message: "PDC is only for Buyer branches" });
+    }
+
+    const { pdcAmount } = req.body;
+    if (!pdcAmount) {
+      return res.status(400).json({ success: false, message: "PDC amount is required" });
+    }
+
+    let pdcImageUrl = branch.pdcImage;
+
+    if (req.file) {
+      pdcImageUrl = await uploadToFirebase(
+        req.file.buffer,
+        req.file.originalname,
+        `pdc/${branch._id}`
+      );
+    }
+
+    await Branch.findByIdAndUpdate(branch._id, {
+      pdcImage:  pdcImageUrl,
+      pdcAmount: Number(pdcAmount),
+    });
+
+    res.json({
+      success: true,
+      message: "PDC uploaded successfully",
+      data: { pdcImage: pdcImageUrl, pdcAmount: Number(pdcAmount) },
+    });
+  } catch (err) {
+    console.error("uploadPdc error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 // ═══════════════════════════════════════════════════════════
 //  STEP 0.3 — Supplier: mark catalog as added
 //  PUT /api/branch/catalog/mark-complete
