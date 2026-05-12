@@ -6,7 +6,7 @@ const Branch       = require("../../models/branch");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
 const mongoose     = require("mongoose");
 
-const BIDDING_START_HOUR = 14;
+const BIDDING_START_HOUR = 17;
 const CANCEL_CUTOFF_MIN  = 2;
 
 const getQatarNow = () => {

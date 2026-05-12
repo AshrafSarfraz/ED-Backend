@@ -13,7 +13,17 @@ const {
   sendOrderWonEmail,
 } = require("../utils/sendEmail");
 
-const COMMISSION_RATE = 0.03; // 3% total (2% platform + 1% delivery)
+// ═══════════════════════════════════════════════
+// ⚙️  SETTINGS — sirf yahan change karo
+// ═══════════════════════════════════════════════
+const SETTINGS = {
+  BULK_ORDER_CRON:     "45 15 * * *",  // 4:00 PM Qatar = 13:00 UTC
+  WINNER_CRON:         "58 15 * * *",  // 4:05 PM Qatar = 13:05 UTC
+  BIDDING_END_UTC_HR:  13,            // 4:05 PM Qatar = 13 UTC
+  BIDDING_END_UTC_MIN: 55,
+};
+
+const COMMISSION_RATE = 0.03; // 3% total
 
 // ─── Helpers ──────────────────────────────────
 const getQatarToday = () => {
@@ -30,17 +40,14 @@ const getQatarTomorrow = () => {
 };
 
 // ═══════════════════════════════════════════════
-// 2PM — Bulk Orders banao
-// Pending BuyerOrders uthao (aaj ki bidDate wale)
-// Agar usi item+country ka BulkOrder already hai to skip
+// 3:10 PM Qatar — Bulk Orders banao
 // ═══════════════════════════════════════════════
-cron.schedule("20 15 * * *", async () => {
-  console.log("⏰ 2:20 PM Cron: BulkOrders bana raha hai...");
+cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
+  console.log("⏰ 3:10 PM Cron: BulkOrders bana raha hai...");
   try {
     const today    = getQatarToday();
     const tomorrow = getQatarTomorrow();
 
-    // Aaj ki bidDate wale pending orders
     const pendingOrders = await BuyerOrder.find({
       status:  "pending",
       bidDate: { $gte: today, $lt: tomorrow },
@@ -53,7 +60,6 @@ cron.schedule("20 15 * * *", async () => {
 
     console.log(`📦 ${pendingOrders.length} pending orders mile`);
 
-    // Item+Country ke groups banao
     const groups = {};
     for (const order of pendingOrders) {
       const key = `${order.platformItemId}_${order.countryId}`;
@@ -82,15 +88,12 @@ cron.schedule("20 15 * * *", async () => {
       groups[key].buyerOrderIds.push(order._id);
     }
 
-    // Bidding 6PM Qatar = 3PM UTC
     const biddingEndsAt = new Date();
-    biddingEndsAt.setUTCHours(30, 15, 0, 0, 0);
+    biddingEndsAt.setUTCHours(SETTINGS.BIDDING_END_UTC_HR, SETTINGS.BIDDING_END_UTC_MIN, 0, 0);
 
     for (const key of Object.keys(groups)) {
       const g = groups[key];
 
-      // ─── Check: isi item+country ka BulkOrder already "bidding" mein hai?
-      // (retry case — kal se carry forward hua order)
       const existingBulk = await BulkOrder.findOne({
         platformItemId: g.platformItemId,
         countryId:      g.countryId,
@@ -98,7 +101,6 @@ cron.schedule("20 15 * * *", async () => {
       });
 
       if (existingBulk) {
-        // Sirf naye orders add karo agar koi naya aaya
         const newOrderIds = g.buyerOrderIds.filter(
           (id) => !existingBulk.buyerOrderIds.map(String).includes(String(id))
         );
@@ -117,7 +119,6 @@ cron.schedule("20 15 * * *", async () => {
             { status: "in_bidding", bulkOrderId: existingBulk._id }
           );
         } else {
-          // Retry wale orders — sirf status update karo
           await BuyerOrder.updateMany(
             { _id: { $in: g.buyerOrderIds } },
             { status: "in_bidding" }
@@ -126,7 +127,6 @@ cron.schedule("20 15 * * *", async () => {
 
         console.log(`♻️  Existing BulkOrder updated: ${existingBulk._id}`);
       } else {
-        // Naya BulkOrder banao
         const bulkOrder = await BulkOrder.create({
           platformItemId: g.platformItemId,
           countryId:      g.countryId,
@@ -148,15 +148,15 @@ cron.schedule("20 15 * * *", async () => {
       }
     }
   } catch (err) {
-    console.error("2PM Cron error:", err);
+    console.error("3:10 PM Cron error:", err);
   }
 }, { timezone: "Asia/Qatar" });
 
 // ═══════════════════════════════════════════════
-// 6PM — Winner select karo
+// 3:15 PM Qatar — Winner select karo
 // ═══════════════════════════════════════════════
-cron.schedule("0 18 * * *", async () => {
-  console.log("⏰ 6PM Cron: Winner select kar raha hai...");
+cron.schedule(SETTINGS.WINNER_CRON, async () => {
+  console.log("⏰ 3:15 PM Cron: Winner select kar raha hai...");
   try {
     const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
 
@@ -171,11 +171,10 @@ cron.schedule("0 18 * * *", async () => {
       const winningBid   = await Bid.findOne({ bulkOrderId: bulkOrder._id })
         .sort({ pricePerUnit: 1 });
 
-      // ─── No bid — retry ya cancel ──────────────────────
+      // ─── No bid ───────────────────────────────────────
       if (!winningBid) {
 
         if (bulkOrder.retryCount >= 3) {
-          // 3 din ho gaye — sab cancel
           await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
 
           const buyerOrders = await BuyerOrder.find({
@@ -183,7 +182,10 @@ cron.schedule("0 18 * * *", async () => {
           }).populate("buyerBranchId");
 
           for (const bo of buyerOrders) {
-            await BuyerOrder.findByIdAndUpdate(bo._id, { status: "cancelled" });
+            await BuyerOrder.findByIdAndUpdate(bo._id, {
+              status:          "cancelled",
+              estimatedAmount: 0,
+            });
             await sendOrderCancelledEmail({
               toEmail:     bo.buyerBranchId.email,
               managerName: bo.buyerBranchId.managerName,
@@ -194,17 +196,14 @@ cron.schedule("0 18 * * *", async () => {
           console.log(`❌ 3 din no supplier — cancelled: ${bulkOrder._id}`);
 
         } else {
-          // Retry — kal ki bidding mein shamil karo
           const tomorrow          = getQatarTomorrow();
           const nextBiddingEndsAt = new Date(tomorrow);
-          nextBiddingEndsAt.setUTCHours(15, 0, 0, 0); // 6PM Qatar
+          nextBiddingEndsAt.setUTCHours(SETTINGS.BIDDING_END_UTC_HR, SETTINGS.BIDDING_END_UTC_MIN, 0, 0);
 
           const buyerOrders = await BuyerOrder.find({
             _id: { $in: bulkOrder.buyerOrderIds },
           }).populate("buyerBranchId");
 
-          // ─── Har BuyerOrder ka PDC check karo ────────
-          // Agar PDC exceed ho gayi to cancel, warna retry
           const retryIds  = [];
           const cancelIds = [];
 
@@ -212,12 +211,10 @@ cron.schedule("0 18 * * *", async () => {
             const branch = await Branch.findById(bo.buyerBranchId._id);
 
             if (!branch?.pdcAmount) {
-              // PDC nahi — cancel
               cancelIds.push(bo._id);
               continue;
             }
 
-            // Remaining PDC nikaalo
             const pendingResult = await Invoice.aggregate([
               {
                 $match: {
@@ -227,35 +224,31 @@ cron.schedule("0 18 * * *", async () => {
               },
               { $group: { _id: null, total: { $sum: "$amountDue" } } },
             ]);
-            const currentPending  = pendingResult[0]?.total || 0;
-            const remaining       = branch.pdcAmount - currentPending;
+            const currentPending = pendingResult[0]?.total || 0;
+            const remaining      = branch.pdcAmount - currentPending;
 
-            // Min price se estimated amount check karo
             const supplierItems = await SupplierItem.find({
               platformItemId:   bulkOrder.platformItemId,
               countryId:        bulkOrder.countryId,
               isListed:         true,
               isAvailableToday: true,
             });
-            const prices   = supplierItems.map((s) => s.pricePerUnit);
-            const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
-
+            const prices          = supplierItems.map((s) => s.pricePerUnit);
+            const maxPrice        = prices.length > 0 ? Math.max(...prices) : null;
             const estimatedAmount = maxPrice ? maxPrice * bo.quantity : 0;
 
             if (remaining <= 0 || (maxPrice && estimatedAmount > remaining)) {
-              // PDC exceed — cancel this order
               cancelIds.push(bo._id);
-              console.log(`❌ PDC exceeded for buyer ${bo.buyerBranchId.email} — order cancelled`);
+              console.log(`❌ PDC exceeded — ${bo.buyerBranchId.email}`);
             } else {
               retryIds.push(bo._id);
             }
           }
 
-          // Cancel wale orders
           if (cancelIds.length > 0) {
             await BuyerOrder.updateMany(
               { _id: { $in: cancelIds } },
-              { status: "cancelled" }
+              { status: "cancelled", estimatedAmount: 0 }
             );
             for (const bo of buyerOrders.filter((b) => cancelIds.map(String).includes(String(b._id)))) {
               await sendOrderCancelledEmail({
@@ -267,13 +260,12 @@ cron.schedule("0 18 * * *", async () => {
             }
           }
 
-          // Retry wale orders — kal ki bidding mein
           if (retryIds.length > 0) {
             await BulkOrder.findByIdAndUpdate(bulkOrder._id, {
               retryCount:    bulkOrder.retryCount + 1,
               bidDate:       tomorrow,
               biddingEndsAt: nextBiddingEndsAt,
-              buyerOrderIds: retryIds, // sirf retry wale
+              buyerOrderIds: retryIds,
               totalQuantity: buyerOrders
                 .filter((b) => retryIds.map(String).includes(String(b._id)))
                 .reduce((sum, b) => sum + b.quantity, 0),
@@ -293,12 +285,10 @@ cron.schedule("0 18 * * *", async () => {
                 dayCount:    bulkOrder.retryCount,
               });
             }
-
-            console.log(`🔄 Retry ${bulkOrder.retryCount + 1}/3 — ${retryIds.length} orders kal dobara`);
+            console.log(`🔄 Retry ${bulkOrder.retryCount + 1}/3 — ${retryIds.length} orders kal`);
           } else {
-            // Sab cancel ho gaye — BulkOrder bhi cancel
             await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
-            console.log(`❌ Sab orders PDC exceed — BulkOrder cancelled`);
+            console.log(`❌ Sab PDC exceed — BulkOrder cancelled`);
           }
         }
         continue;
@@ -322,12 +312,9 @@ cron.schedule("0 18 * * *", async () => {
       }).populate("buyerBranchId");
 
       for (const bo of buyerOrders) {
-        // ─── 3% commission supplier price mein add karo ─
-        // Buyer ko sirf final price dikhta hai — koi breakdown nahi
-        const priceWithCommission  = Math.round(winningBid.pricePerUnit * (1 + COMMISSION_RATE) * 100) / 100;
-        const totalAmount          = Math.round(bo.quantity * priceWithCommission * 100) / 100;
+        const priceWithCommission = Math.round(winningBid.pricePerUnit * (1 + COMMISSION_RATE) * 100) / 100;
+        const totalAmount         = Math.round(bo.quantity * priceWithCommission * 100) / 100;
 
-        // Invoice ke liye alag breakdown (accounting ke liye)
         const rawTotal         = bo.quantity * winningBid.pricePerUnit;
         const commissionAmount = Math.round(rawTotal * 0.02 * 100) / 100;
         const deliveryAmount   = Math.round(rawTotal * 0.01 * 100) / 100;
@@ -350,19 +337,18 @@ cron.schedule("0 18 * * *", async () => {
           invoiceNumber,
           quantity:         bo.quantity,
           unit:             platformItem?.unit,
-          pricePerUnit:     winningBid.pricePerUnit,   // original — accounting
+          pricePerUnit:     winningBid.pricePerUnit,
           totalAmount:      rawTotal,
           commissionAmount,
           deliveryAmount,
           totalFeeAmount,
-          grandTotal:       totalAmount,               // 3% included
-          deliveryCharge:   0,                         // baad mein add hoga
+          grandTotal:       totalAmount,
+          deliveryCharge:   0,
           amountDue:        totalAmount,
           dueDate,
           invoiceStatus:    "draft",
         });
 
-        // Email — pricePerUnit mein 3% already hai
         await sendOrderWonEmail({
           toEmail:      bo.buyerBranchId.email,
           managerName:  bo.buyerBranchId.managerName,
@@ -370,17 +356,22 @@ cron.schedule("0 18 * * *", async () => {
           country:      country?.name,
           quantity:     bo.quantity,
           unit:         platformItem?.unit,
-          pricePerUnit: priceWithCommission,  // 3% baked in
-          totalAmount,                         // quantity × priceWithCommission
+          pricePerUnit: priceWithCommission,
+          totalAmount,
         });
 
-        await BuyerOrder.findByIdAndUpdate(bo._id, { status: "won" });
+        // ← estimatedAmount 0 karo — invoice track karega
+        await BuyerOrder.findByIdAndUpdate(bo._id, {
+          status:          "won",
+          estimatedAmount: 0,
+        });
+
         console.log(`🧾 Invoice: ${invoiceNumber} | ${priceWithCommission} QAR/${platformItem?.unit}`);
       }
 
       console.log(`✅ Winner: ${winningBid.pricePerUnit} QAR | BulkOrder: ${bulkOrder._id}`);
     }
   } catch (err) {
-    console.error("6PM Cron error:", err);
+    console.error("3:15 PM Cron error:", err);
   }
 }, { timezone: "Asia/Qatar" });

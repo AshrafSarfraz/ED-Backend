@@ -165,41 +165,84 @@ exports.getMyBids = async (req, res) => {
       return res.status(403).json({ success: false, message: "Only suppliers can access this" });
     }
 
-    const bids = await Bid.find({ supplierBranchId: req.branch._id })
-      .populate("bulkOrderId")
-      .sort({ createdAt: -1 });
+    // Supplier ke items
+    const supplierItems = await SupplierItem.find({
+      branchId: req.branch._id,
+      isListed: true,
+    });
+
+    const combinations = supplierItems.map(item => ({
+      platformItemId: item.platformItemId.toString(),
+      countryId:      item.countryId.toString(),
+    }));
+
+    // Sare completed BulkOrders (awarded + cancelled)
+    const allBulkOrders = await BulkOrder.find({
+      status: { $in: ["bidding", "awarded", "cancelled", "ready"] },
+    });
+
+    // Sirf eligible BulkOrders
+    const eligibleBulkOrders = allBulkOrders.filter(bulk =>
+      combinations.some(
+        c =>
+          c.platformItemId === bulk.platformItemId.toString() &&
+          c.countryId      === bulk.countryId.toString()
+      )
+    );
 
     const result = await Promise.all(
-      bids.map(async (bid) => {
-        const bulk = bid.bulkOrderId;
-
-        // ← null check add karo
-        if (!bulk) return null;
-
-        const platformItem = await PlatformItem.findById(bulk.platformItemId).select("name unit");
+      eligibleBulkOrders.map(async (bulk) => {
+        const platformItem = await PlatformItem.findById(bulk.platformItemId).select("name unit image");
         const country      = await Country.findById(bulk.countryId).select("name");
 
+        // Meri bid
+        const myBid = await Bid.findOne({
+          bulkOrderId:      bulk._id,
+          supplierBranchId: req.branch._id,
+        });
+
+        // Winner bid
+        const winningBid = await Bid.findOne({
+          bulkOrderId: bulk._id,
+          status:      "won",
+        });
+
+        let bidStatus;
+        if (bulk.status === "bidding") {
+          bidStatus = myBid ? "pending" : "not_bid";
+        } else if (!myBid) {
+          bidStatus = "missed";       // eligible tha par bid nahi lagayi
+        } else {
+          bidStatus = myBid.status;   // won / lost
+        }
+
         return {
-          bidId:         bid._id,
           bulkOrderId:   bulk._id,
           itemName:      platformItem?.name,
+          itemImage:     platformItem?.image,
           unit:          platformItem?.unit,
           country:       country?.name,
           totalQuantity: bulk.totalQuantity,
           minPrice:      bulk.minPrice,
           maxPrice:      bulk.maxPrice,
-          myPrice:       bid.pricePerUnit,
-          status:        bid.status,
-          winningPrice:  bulk.winningPrice,
           biddingEndsAt: bulk.biddingEndsAt,
+          bulkStatus:    bulk.status,
+
+          // Meri bid info
+          myPrice:       myBid?.pricePerUnit || null,
+          bidStatus,                           // won/lost/missed/pending/not_bid
+
+          // Winner info
+          winningPrice:  bulk.winningPrice || null,
+          iWon:          myBid?.status === "won",
         };
       })
     );
 
-    // ← null filter karo
-    const filtered = result.filter(item => item !== null);
+    // Sort by latest
+    result.sort((a, b) => new Date(b.biddingEndsAt) - new Date(a.biddingEndsAt));
 
-    res.json({ success: true, total: filtered.length, data: filtered });
+    res.json({ success: true, total: result.length, data: result });
   } catch (err) {
     console.error("getMyBids error:", err);
     res.status(500).json({ success: false, message: "Server error" });
