@@ -1,4 +1,4 @@
-const Branch = require("../models/Branch");
+const Branch = require("../models/branch");
 const Company = require("../models/createCompany");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
