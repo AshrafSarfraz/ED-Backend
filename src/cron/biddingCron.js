@@ -6,7 +6,7 @@ const PlatformItem = require("../models/PlatformItem");
 const Country      = require("../models/Country");
 const Invoice      = require("../models/invoice");
 const SupplierItem = require("../models/supplier/supplierCatalog");
-const Branch       = require("../models/branch"); // ← add karo
+const Branch       = require("../models/Branch"); // ← add karo
 const {
   sendNoBidEmail,
   sendOrderCancelledEmail,
