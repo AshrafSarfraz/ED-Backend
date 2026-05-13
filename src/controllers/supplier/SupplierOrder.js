@@ -2,7 +2,7 @@ const BuyerOrder    = require("../../models/buyer/buyerOrder");
 const BulkOrder     = require("../../models/BulkOrder");
 const Invoice       = require("../../models/invoice");
 const DeliveryOrder = require("../../models/rider/deliveryOrder");
-const Branch        = require("../../models/branch");
+const Branch        = require("../../models/Branch");
 const Bid           = require("../../models/Bid");
 
 // ═══════════════════════════════════════════════════════
