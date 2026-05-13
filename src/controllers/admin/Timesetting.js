@@ -1,6 +1,6 @@
 const SystemSettings = require("../../models/supplier/systemSetting");
 const BulkOrder      = require("../../models/BulkOrder");
-const Branch         = require("../../models/branch");
+const Branch         = require("../../models/Branch");
 
 // ═══════════════════════════════════════════════════════
 //  ADMIN — Get Timeline
