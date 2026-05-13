@@ -7,20 +7,25 @@ const bulkOrderSchema = new mongoose.Schema(
     countryId:        { type: mongoose.Schema.Types.ObjectId, ref: "Country",      required: true },
     totalQuantity:    { type: Number, required: true },
     buyerOrderIds:    [{ type: mongoose.Schema.Types.ObjectId, ref: "BuyerOrder" }],
-    minPrice: { type: Number, default: null }, // ← min supplier price
-    maxPrice: { type: Number, default: null }, // ← max supplier price
-  
+    minPrice:         { type: Number, default: null },
+    maxPrice:         { type: Number, default: null },
+
     status: {
       type: String,
-      enum: ["bidding", "awarded","ready", "cancelled"],
+      enum: ["bidding", "awarded", "ready", "cancelled"],
       default: "bidding",
     },
 
-    winnerSupplierId: { type: mongoose.Schema.Types.ObjectId, ref: "branch", default: null },
+    winnerSupplierId: { type: mongoose.Schema.Types.ObjectId, ref: "branch",  default: null },
     winningPrice:     { type: Number, default: null },
-    bidDate:          { type: Date, required: true },
-    biddingEndsAt:    { type: Date, required: true },
-    retryCount:       { type: Number, default: 1 }, // ← naya field
+    bidDate:          { type: Date,   required: true },
+    biddingEndsAt:    { type: Date,   required: true },
+    retryCount:       { type: Number, default: 1 },
+    estimatedDays:    { type: Number, default: null },
+    readyAt:          { type: Date,   default: null },
+
+    isLate:     { type: Boolean, default: false },
+    lateReason: { type: String,  default: null },
   },
   { timestamps: true }
 );

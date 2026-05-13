@@ -6,7 +6,7 @@ const PlatformItem = require("../models/PlatformItem");
 const Country      = require("../models/Country");
 const Invoice      = require("../models/invoice");
 const SupplierItem = require("../models/supplier/supplierCatalog");
-const Branch       = require("../models/branch");
+const Branch       = require("../models/branch"); // ← add karo
 const {
   sendNoBidEmail,
   sendOrderCancelledEmail,
@@ -14,18 +14,20 @@ const {
 } = require("../utils/sendEmail");
 
 // ═══════════════════════════════════════════════
-// ⚙️  SETTINGS — sirf yahan change karo
+// ⚙️  SETTINGS
 // ═══════════════════════════════════════════════
 const SETTINGS = {
-  BULK_ORDER_CRON:     "45 15 * * *",  // 4:00 PM Qatar = 13:00 UTC
-  WINNER_CRON:         "58 15 * * *",  // 4:05 PM Qatar = 13:05 UTC
-  BIDDING_END_UTC_HR:  13,            // 4:05 PM Qatar = 13 UTC
+  BULK_ORDER_CRON:     "45 15 * * *",
+  WINNER_CRON:         "58 15 * * *",
+  BIDDING_END_UTC_HR:  13,
   BIDDING_END_UTC_MIN: 55,
+  BIDDING_START_QATAR: 18,
 };
 
-const COMMISSION_RATE = 0.03; // 3% total
+module.exports = { SETTINGS }; // ← export karo
 
-// ─── Helpers ──────────────────────────────────
+const COMMISSION_RATE = 0.03;
+
 const getQatarToday = () => {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -40,10 +42,10 @@ const getQatarTomorrow = () => {
 };
 
 // ═══════════════════════════════════════════════
-// 3:10 PM Qatar — Bulk Orders banao
+// Bidding Start Cron
 // ═══════════════════════════════════════════════
 cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
-  console.log("⏰ 3:10 PM Cron: BulkOrders bana raha hai...");
+  console.log("⏰ Bidding Start Cron...");
   try {
     const today    = getQatarToday();
     const tomorrow = getQatarTomorrow();
@@ -54,7 +56,7 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
     });
 
     if (pendingOrders.length === 0) {
-      console.log("❌ Koi pending order nahi aaj ka");
+      console.log("❌ Koi pending order nahi");
       return;
     }
 
@@ -113,7 +115,6 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
             minPrice: g.minPrice,
             maxPrice: g.maxPrice,
           });
-
           await BuyerOrder.updateMany(
             { _id: { $in: newOrderIds } },
             { status: "in_bidding", bulkOrderId: existingBulk._id }
@@ -124,8 +125,7 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
             { status: "in_bidding" }
           );
         }
-
-        console.log(`♻️  Existing BulkOrder updated: ${existingBulk._id}`);
+        console.log(`♻️ BulkOrder updated: ${existingBulk._id}`);
       } else {
         const bulkOrder = await BulkOrder.create({
           platformItemId: g.platformItemId,
@@ -143,20 +143,19 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
           { _id: { $in: g.buyerOrderIds } },
           { status: "in_bidding", bulkOrderId: bulkOrder._id }
         );
-
-        console.log(`✅ New BulkOrder: ${bulkOrder._id} | ${g.minPrice}-${g.maxPrice} QAR`);
+        console.log(`✅ BulkOrder: ${bulkOrder._id}`);
       }
     }
   } catch (err) {
-    console.error("3:10 PM Cron error:", err);
+    console.error("Bidding Start error:", err);
   }
 }, { timezone: "Asia/Qatar" });
 
 // ═══════════════════════════════════════════════
-// 3:15 PM Qatar — Winner select karo
+// Winner Select Cron
 // ═══════════════════════════════════════════════
 cron.schedule(SETTINGS.WINNER_CRON, async () => {
-  console.log("⏰ 3:15 PM Cron: Winner select kar raha hai...");
+  console.log("⏰ Winner Select Cron...");
   try {
     const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
 
@@ -173,7 +172,6 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
 
       // ─── No bid ───────────────────────────────────────
       if (!winningBid) {
-
         if (bulkOrder.retryCount >= 3) {
           await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
 
@@ -183,8 +181,7 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
 
           for (const bo of buyerOrders) {
             await BuyerOrder.findByIdAndUpdate(bo._id, {
-              status:          "cancelled",
-              estimatedAmount: 0,
+              status: "cancelled", estimatedAmount: 0,
             });
             await sendOrderCancelledEmail({
               toEmail:     bo.buyerBranchId.email,
@@ -193,7 +190,7 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
               country:     country?.name,
             });
           }
-          console.log(`❌ 3 din no supplier — cancelled: ${bulkOrder._id}`);
+          console.log(`❌ Cancelled: ${bulkOrder._id}`);
 
         } else {
           const tomorrow          = getQatarTomorrow();
@@ -209,25 +206,22 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
 
           for (const bo of buyerOrders) {
             const branch = await Branch.findById(bo.buyerBranchId._id);
-
-            if (!branch?.pdcAmount) {
-              cancelIds.push(bo._id);
-              continue;
-            }
+            if (!branch?.pdcAmount) { cancelIds.push(bo._id); continue; }
 
             const pendingResult = await Invoice.aggregate([
               {
                 $match: {
                   buyerBranchId: bo.buyerBranchId._id,
+                  invoiceType:   "buyer",
                   paymentStatus: { $in: ["unpaid", "partial", "overdue"] },
                 },
               },
               { $group: { _id: null, total: { $sum: "$amountDue" } } },
             ]);
-            const currentPending = pendingResult[0]?.total || 0;
-            const remaining      = branch.pdcAmount - currentPending;
 
-            const supplierItems = await SupplierItem.find({
+            const currentPending  = pendingResult[0]?.total || 0;
+            const remaining       = branch.pdcAmount - currentPending;
+            const supplierItems   = await SupplierItem.find({
               platformItemId:   bulkOrder.platformItemId,
               countryId:        bulkOrder.countryId,
               isListed:         true,
@@ -239,7 +233,6 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
 
             if (remaining <= 0 || (maxPrice && estimatedAmount > remaining)) {
               cancelIds.push(bo._id);
-              console.log(`❌ PDC exceeded — ${bo.buyerBranchId.email}`);
             } else {
               retryIds.push(bo._id);
             }
@@ -285,10 +278,9 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
                 dayCount:    bulkOrder.retryCount,
               });
             }
-            console.log(`🔄 Retry ${bulkOrder.retryCount + 1}/3 — ${retryIds.length} orders kal`);
+            console.log(`🔄 Retry ${bulkOrder.retryCount + 1}/3`);
           } else {
             await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
-            console.log(`❌ Sab PDC exceed — BulkOrder cancelled`);
           }
         }
         continue;
@@ -307,24 +299,28 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
         { status: "lost" }
       );
 
+      const supplierBranch = await Branch.findById(winningBid.supplierBranchId);
+      const packingDays    = supplierBranch?.defaultPackingDays || 2;
+
       const buyerOrders = await BuyerOrder.find({
         _id: { $in: bulkOrder.buyerOrderIds },
       }).populate("buyerBranchId");
 
       for (const bo of buyerOrders) {
-        const priceWithCommission = Math.round(winningBid.pricePerUnit * (1 + COMMISSION_RATE) * 100) / 100;
-        const totalAmount         = Math.round(bo.quantity * priceWithCommission * 100) / 100;
-
-        const rawTotal         = bo.quantity * winningBid.pricePerUnit;
-        const commissionAmount = Math.round(rawTotal * 0.02 * 100) / 100;
-        const deliveryAmount   = Math.round(rawTotal * 0.01 * 100) / 100;
-        const totalFeeAmount   = commissionAmount + deliveryAmount;
+        const rawTotal            = bo.quantity * winningBid.pricePerUnit;
+        const commissionAmount    = Math.round(rawTotal * 0.02 * 100) / 100;
+        const deliveryAmount      = Math.round(rawTotal * 0.01 * 100) / 100;
+        const totalFeeAmount      = commissionAmount + deliveryAmount;
+        const buyerGrandTotal     = Math.round((rawTotal + totalFeeAmount) * 100) / 100;
 
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30);
 
-        const count         = await Invoice.countDocuments();
-        const invoiceNumber = `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String(count + 1).padStart(4, "0")}`;
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+        // ─── Buyer Invoice ─────────────────────────────
+        const buyerCount   = await Invoice.countDocuments();
+        const buyerInvNum  = `INV-B-${dateStr}-${String(buyerCount + 1).padStart(4, "0")}`;
 
         await Invoice.create({
           buyerOrderId:     bo._id,
@@ -334,7 +330,9 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
           supplierBranchId: winningBid.supplierBranchId,
           platformItemId:   bulkOrder.platformItemId,
           countryId:        bulkOrder.countryId,
-          invoiceNumber,
+          invoiceNumber:    buyerInvNum,
+          invoiceType:      "buyer",
+          invoiceStatus:    "final",
           quantity:         bo.quantity,
           unit:             platformItem?.unit,
           pricePerUnit:     winningBid.pricePerUnit,
@@ -342,13 +340,42 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
           commissionAmount,
           deliveryAmount,
           totalFeeAmount,
-          grandTotal:       totalAmount,
+          grandTotal:       buyerGrandTotal,
           deliveryCharge:   0,
-          amountDue:        totalAmount,
+          amountDue:        buyerGrandTotal,
           dueDate,
-          invoiceStatus:    "draft",
         });
 
+        // ─── Supplier Invoice ──────────────────────────
+        const supplierCount  = await Invoice.countDocuments();
+        const supplierInvNum = `INV-S-${dateStr}-${String(supplierCount + 1).padStart(4, "0")}`;
+
+        await Invoice.create({
+          buyerOrderId:     bo._id,
+          bulkOrderId:      bulkOrder._id,
+          buyerBranchId:    bo.buyerBranchId._id,
+          buyerCompanyId:   bo.buyerCompanyId,
+          supplierBranchId: winningBid.supplierBranchId,
+          platformItemId:   bulkOrder.platformItemId,
+          countryId:        bulkOrder.countryId,
+          invoiceNumber:    supplierInvNum,
+          invoiceType:      "supplier",
+          invoiceStatus:    "final",
+          quantity:         bo.quantity,
+          unit:             platformItem?.unit,
+          pricePerUnit:     winningBid.pricePerUnit,
+          totalAmount:      rawTotal,
+          commissionAmount: 0,
+          deliveryAmount:   0,
+          totalFeeAmount:   0,
+          grandTotal:       rawTotal,
+          deliveryCharge:   0,
+          amountDue:        rawTotal,
+          dueDate,
+          supplierPaymentStatus: "pending",
+        });
+
+        // Email buyer
         await sendOrderWonEmail({
           toEmail:      bo.buyerBranchId.email,
           managerName:  bo.buyerBranchId.managerName,
@@ -356,22 +383,22 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
           country:      country?.name,
           quantity:     bo.quantity,
           unit:         platformItem?.unit,
-          pricePerUnit: priceWithCommission,
-          totalAmount,
+          pricePerUnit: Math.round(winningBid.pricePerUnit * 1.03 * 100) / 100,
+          totalAmount:  buyerGrandTotal,
+          packingDays,
         });
 
-        // ← estimatedAmount 0 karo — invoice track karega
         await BuyerOrder.findByIdAndUpdate(bo._id, {
           status:          "won",
           estimatedAmount: 0,
         });
 
-        console.log(`🧾 Invoice: ${invoiceNumber} | ${priceWithCommission} QAR/${platformItem?.unit}`);
+        console.log(`🧾 Buyer: ${buyerInvNum} | Supplier: ${supplierInvNum}`);
       }
 
-      console.log(`✅ Winner: ${winningBid.pricePerUnit} QAR | BulkOrder: ${bulkOrder._id}`);
+      console.log(`✅ Winner: ${winningBid.pricePerUnit} QAR`);
     }
   } catch (err) {
-    console.error("3:15 PM Cron error:", err);
+    console.error("Winner Cron error:", err);
   }
 }, { timezone: "Asia/Qatar" });

@@ -11,11 +11,20 @@ const buyerOrderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "in_bidding", "won", "delivered", "cancelled", "return_requested", "returned"],
+      enum: [
+        "pending",
+        "in_bidding",
+        "won",
+        "packed",
+        "ready_for_pickup",
+        "delivered",
+        "cancelled",
+        "return_requested",
+        "returned"
+      ],
       default: "pending",
     },
 
-    // ─── Delivery Address ─────────────────────────
     deliveryAddress: {
       lat:     { type: Number, default: null },
       lng:     { type: Number, default: null },
@@ -23,10 +32,11 @@ const buyerOrderSchema = new mongoose.Schema(
       area:    { type: String, default: null },
       city:    { type: String, default: null },
     },
-    packedStatus: { type: Boolean, default: false },
-    bulkOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "BulkOrder", default: null },
-    bidDate:     { type: Date, default: null },
-    estimatedAmount: { type: Number, default: 0 },
+
+    packedStatus:    { type: Boolean, default: false },
+    bulkOrderId:     { type: mongoose.Schema.Types.ObjectId, ref: "BulkOrder", default: null },
+    bidDate:         { type: Date,    default: null },
+    estimatedAmount: { type: Number,  default: 0 },
   },
   { timestamps: true }
 );

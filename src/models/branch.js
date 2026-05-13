@@ -11,7 +11,6 @@ const branchSchema = new mongoose.Schema(
     email:       { type: String, required: true, unique: true, lowercase: true, trim: true },
     password:    { type: String, required: true },
 
-    // ─── Address ──────────────────────────────────────────
     address: {
       lat:     { type: Number, default: null },
       lng:     { type: Number, default: null },
@@ -20,7 +19,6 @@ const branchSchema = new mongoose.Schema(
       city:    { type: String, default: null },
     },
 
-    // ─── Warehouse (Supplier only) ────────────────────────
     warehouseAddress: {
       lat:     { type: Number, default: null },
       lng:     { type: Number, default: null },
@@ -29,7 +27,6 @@ const branchSchema = new mongoose.Schema(
       city:    { type: String, default: null },
     },
 
-    // ─── Bank Details ─────────────────────────────────────
     bankDetails: {
       accountName:   { type: String, default: null },
       accountNumber: { type: String, default: null },
@@ -37,12 +34,12 @@ const branchSchema = new mongoose.Schema(
       bankName:      { type: String, default: null },
     },
 
-    // ─── Documents ────────────────────────────────────────
     contractPdf: { type: String, default: null },
     pdcImage:    { type: String, default: null },
-    pdcAmount:   { type: Number, default: null }, // Buyer purchase limit
+    pdcAmount:   { type: Number, default: null },
 
-    // ─── Supplier Penalties ───────────────────────────────
+    defaultPackingDays: { type: Number, default: 2 },
+
     cancellationCount: { type: Number, default: 0 },
     isBanned:          { type: Boolean, default: false },
     bannedUntil:       { type: Date,    default: null },

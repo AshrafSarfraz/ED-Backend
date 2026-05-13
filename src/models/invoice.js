@@ -11,29 +11,21 @@ const invoiceSchema = new mongoose.Schema(
     platformItemId:   { type: mongoose.Schema.Types.ObjectId, ref: "PlatformItem", required: true },
     countryId:        { type: mongoose.Schema.Types.ObjectId, ref: "Country",      required: true },
 
-    invoiceNumber:  { type: String, unique: true },
-    invoiceStatus:  { type: String, enum: ["draft", "final"], default: "draft" },
+    invoiceNumber: { type: String, unique: true },
+    invoiceType:   { type: String, enum: ["buyer", "supplier"], default: "buyer" },
+    invoiceStatus: { type: String, enum: ["final"], default: "final" },
 
-    // ─── Amounts ──────────────────────────────────────────
-    quantity:         { type: Number, required: true },
-    unit:             { type: String,  required: true },
-    pricePerUnit:     { type: Number, required: true },
-    totalAmount:      { type: Number, required: true }, // quantity × pricePerUnit
+    quantity:     { type: Number, required: true },
+    unit:         { type: String, required: true },
+    pricePerUnit: { type: Number, required: true },
 
-    // ─── Commission (3% = 2% platform + 1% delivery) ─────
-    commissionRate:   { type: Number, default: 2 },     // 2% platform
+    totalAmount:      { type: Number, default: 0 },
     commissionAmount: { type: Number, default: 0 },
-    deliveryRate:     { type: Number, default: 1 },     // 1% delivery
     deliveryAmount:   { type: Number, default: 0 },
-    totalFeeAmount:   { type: Number, default: 0 },     // 3% total
-
-    // ─── Delivery Charge (distance based) ─────────────────
+    totalFeeAmount:   { type: Number, default: 0 },
     deliveryCharge:   { type: Number, default: 0 },
+    grandTotal:       { type: Number, default: 0 },
 
-    // ─── Grand Total ──────────────────────────────────────
-    grandTotal:       { type: Number, default: 0 },     // totalAmount + totalFeeAmount + deliveryCharge
-
-    // ─── Payment ──────────────────────────────────────────
     paymentStatus: {
       type: String,
       enum: ["unpaid", "partial", "paid", "overdue"],
@@ -41,42 +33,25 @@ const invoiceSchema = new mongoose.Schema(
     },
     amountPaid:  { type: Number, default: 0 },
     amountDue:   { type: Number, required: true },
-    dueDate:     { type: Date,   required: true },      // 30 days
-    fineAmount:  { type: Number, default: 0 },          // 3% per week overdue
+    dueDate:     { type: Date,   required: true },
+    fineAmount:  { type: Number, default: 0 },
 
-    // ─── Redelivery ───────────────────────────────────────
-    redeliveryCount:  { type: Number, default: 0 },
-    redeliveryCharge: { type: Number, default: 0 },
-
-    // ─── Delivery ─────────────────────────────────────────
     deliveryStatus: {
       type: String,
-      enum: ["pending", "dispatched", "delivered", "returned", "cancelled"],
+      enum: ["pending", "picked_up", "delivered", "returned", "cancelled"],
       default: "pending",
     },
-    deliveredAt:    { type: Date, default: null },
-    returnDeadline: { type: Date, default: null },      // deliveredAt + 24hrs
+    deliveredAt:    { type: Date,   default: null },
+    returnDeadline: { type: Date,   default: null },
+    returnReason:   { type: String, default: null },
 
-    // ─── Return ───────────────────────────────────────────
-    returnReason: {
-      type: String,
-      enum: ["incorrect", "damaged", "rotten", "expired", null],
-      default: null,
-    },
-    returnFault: {
-      type: String,
-      enum: ["supplier", "rider", null],
-      default: null,
-    },
-    returnPenalty: { type: Number, default: 0 },        // 2% if supplier fault
-
-    // ─── Supplier Payment ─────────────────────────────────
     supplierPaymentStatus: {
       type: String,
-      enum: ["pending", "released"],
+      enum: ["pending", "released", "deducted"],
       default: "pending",
     },
-    supplierPaidAt: { type: Date, default: null },
+    supplierPaidAt:    { type: Date,   default: null },
+    supplierDeduction: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -13,6 +13,10 @@ app.use(express.urlencoded({ extended: true }));
 
 
 
+app.use("/api/admin/settings", require("./src/routes/admin/timeSetting"));
+
+
+
 app.use("/api/becomePartner",   require("./src/routes/becomePartner") );
 app.use("/api/company",         require("./src/routes/company"));
 app.use("/api/branch",          require("./src/routes/branchRoutes"));
@@ -25,6 +29,8 @@ app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
 app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
 app.use("/api/buyer/payments", require("./src/routes/payment"));
+
+app.use("/api/rider-company",   require("./src/routes/rider/riderCompany"));
 
 
 
