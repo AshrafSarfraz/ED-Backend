@@ -22,7 +22,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-
+app.use("/api/admin/auth", require("./src/routes/admin/auth"));
 app.use("/api/admin/settings", require("./src/routes/admin/timeSetting"));
 
 

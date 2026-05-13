@@ -19,6 +19,32 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
+
+// ─── Company Emails ───────────────────────────────────────
+
+exports.sendAdminCredentialsEmail = async ({ toEmail, name, password, role }) => {
+  await transporter.sendMail({
+    from:    process.env.EMAIL_FROM,
+    to:      toEmail,
+    subject: "El Distributor Admin — Login Credentials",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+        <h2>Welcome to El Distributor Admin Panel</h2>
+        <p>Hello <strong>${name}</strong>,</p>
+        <p>Your account has been created with role: <strong>${role.toUpperCase()}</strong></p>
+        <hr/>
+        <p><strong>Email:</strong> ${toEmail}</p>
+        <p><strong>Password:</strong> ${password}</p>
+        <hr/>
+        <p>Please login and change your password immediately.</p>
+        <p style="color: red;">Do not share these credentials with anyone.</p>
+      </div>
+    `,
+  });
+};
+
+
+
 // ─── Company Emails ───────────────────────────────────────
 
 const sendNewRequestConfirmation = async ({ toEmail, brandName }) => {
