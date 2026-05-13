@@ -10,7 +10,17 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://el-distibutor-backend.onrender.com",
+    "*" // development ke liye
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 
 app.use("/api/admin/settings", require("./src/routes/admin/timeSetting"));
@@ -35,6 +45,11 @@ app.use("/api/rider-company",   require("./src/routes/rider/riderCompany"));
 
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
+
+
+
+
+
 
 app.use((req, res) =>
   res.status(404).json({ success: false, message: "Route not found" })
