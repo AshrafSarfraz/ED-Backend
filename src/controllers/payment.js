@@ -1,4 +1,4 @@
-const Invoice  = require("../../src/models/invoice");
+const Invoice  = require("../models/invoice");
 // const Branch   = require("../../src/models/Branch");
 
 // ═══════════════════════════════════════════════════════
