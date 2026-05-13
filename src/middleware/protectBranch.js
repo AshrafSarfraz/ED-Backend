@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const Branch = require("../models/branch");
+const Branch = require("../models/Branch");
 
 exports.protectBranch = async (req, res, next) => {
   try {
