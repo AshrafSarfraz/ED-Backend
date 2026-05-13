@@ -55,5 +55,5 @@ const branchSchema = new mongoose.Schema(
 );
 
 module.exports =
-  El_Distributor.models["branch"] ||
-  El_Distributor.model("branch", branchSchema);
+  El_Distributor.models["Branch"] ||
+  El_Distributor.model("Branch", branchSchema);
