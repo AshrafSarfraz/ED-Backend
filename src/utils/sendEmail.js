@@ -22,7 +22,7 @@ const sendMail = async ({ to, subject, html }) => {
 
 // ─── Company Emails ───────────────────────────────────────
 
-exports.sendAdminCredentialsEmail = async ({ toEmail, name, password, role }) => {
+const sendAdminCredentialsEmail = async ({ toEmail, name, password, role }) => {
   await transporter.sendMail({
     from:    process.env.EMAIL_FROM,
     to:      toEmail,
@@ -334,6 +334,7 @@ const sendOrderWonEmail = async ({ toEmail, managerName, itemName, country, quan
 };
 
 module.exports = {
+  sendAdminCredentialsEmail,
   sendNewRequestConfirmation,
   sendAdminNewRequestNotification,
   sendApprovalEmail,
