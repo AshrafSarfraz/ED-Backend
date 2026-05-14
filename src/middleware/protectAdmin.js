@@ -39,13 +39,12 @@ const superAdminOnly = (req, res, next) => {
 
 // ─── Admin + SuperAdmin (no user) ─────────────
 const adminOnly = (req, res, next) => {
-  if (req.admin.role === "user") {
+  if (!["admin", "superadmin"].includes(req.admin.role)) {
     return res.status(403).json({ 
       success: false, 
-      message: "Admin access required — read only mode" 
+      message: "Admin access required" 
     });
   }
   next();
 };
-
 module.exports = { protectAdmin, superAdminOnly, adminOnly };

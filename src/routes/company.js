@@ -14,6 +14,7 @@ const {
 
 const upload = require("../middleware/multer");
 const { protectCompany } = require("../middleware/protectCompany");
+const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
 
 router.patch(
   "/me/update",
@@ -44,9 +45,9 @@ router.patch("/me/change-password", protectCompany, changePassword);
 
 
 // Admin routes
-router.get("/admin/companies", getAllCompanies);
-router.get("/admin/companies/:id", getCompany);
-router.delete("/admin/companies/:id", deleteCompany);
-router.patch("/admin/companies/:id/toggle-active", toggleActive);
+router.get("/admin/companies",                        protectAdmin, adminOnly,  getAllCompanies);
+router.get("/admin/companies/:id",                    protectAdmin, adminOnly,  getCompany);
+router.delete("/admin/companies/:id",                 protectAdmin, adminOnly,  deleteCompany);
+router.patch("/admin/companies/:id/toggle-active",    protectAdmin, adminOnly,  toggleActive);   
 
 module.exports = router;
