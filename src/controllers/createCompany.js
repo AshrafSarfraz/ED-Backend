@@ -1,4 +1,5 @@
 const Company      = require("../models/createCompany");
+const Branch      = require("../models/Branch");
 const bcrypt       = require("bcryptjs");
 const jwt          = require("jsonwebtoken");
 const generateTempPassword = require("../utils/generatePassword");
@@ -357,6 +358,21 @@ exports.deleteCompany = async (req, res) => {
       return res.status(404).json({ success: false, message: "Company not found" });
     }
     res.json({ success: true, message: "Company deleted ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+exports.getCompanyBranches = async (req, res) => {
+  try {
+    const branches = await Branch.find({ companyId: req.params.id })
+      .select("-password")
+      .sort({ createdAt: -1 });
+
+    const company = await Company.findById(req.params.id).select("-password");
+
+    res.json({ success: true, company, data: branches, total: branches.length });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }

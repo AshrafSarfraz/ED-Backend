@@ -68,6 +68,7 @@ const {
   approveDocuments,
   toggleActive,
   deleteCompany,
+  getCompanyBranches,
 } = require("../controllers/createCompany");
 
 const upload = require("../middleware/multer");
@@ -93,8 +94,10 @@ router.patch(
 );
 
 // ─── Admin ────────────────────────────────────────────
+// ─── Admin ────────────────────────────────────────────
 router.get("/admin/companies",                           protectAdmin, adminOnly, getAllCompanies);
 router.get("/admin/companies/:id",                       protectAdmin, adminOnly, getCompany);
+router.get("/admin/companies/:id/branches",              protectAdmin, adminOnly, getCompanyBranches); // ← add karo
 router.put("/admin/companies/:id/approve-documents",     protectAdmin, adminOnly, approveDocuments);
 router.patch("/admin/companies/:id/toggle-active",       protectAdmin, adminOnly, toggleActive);
 router.delete("/admin/companies/:id",                    protectAdmin, adminOnly, deleteCompany);
