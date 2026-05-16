@@ -133,6 +133,53 @@ const sendRejectionEmail = async ({ toEmail, brandName }) => {
   });
 };
 
+const sendCompanyDocumentEmail = async ({ toEmail, brandName, action, reason }) => {
+  let subject, html;
+
+  if (action === "approved") {
+    subject = "Documents Approved — El Distributor";
+    html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#f9f9f9;">
+        <div style="background:#fff;border-radius:12px;padding:32px;border:1px solid #e5e5e5;">
+          <h2 style="color:#16a34a;margin-top:0;">Documents Approved! ✅</h2>
+          <p style="color:#444;font-size:15px;">Dear <strong>${brandName}</strong>,</p>
+          <p style="color:#444;font-size:15px;">Your documents have been verified and approved.</p>
+          <p style="color:#444;font-size:15px;">You can now login and start adding your branches.</p>
+          <a href="https://eldistributor.com/company/login"
+             style="display:inline-block;background:#1a1a1a;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px;">
+            Login Now →
+          </a>
+        </div>
+      </div>`;
+  } else {
+    subject = "Documents Not Approved — El Distributor";
+    html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#f9f9f9;">
+        <div style="background:#fff;border-radius:12px;padding:32px;border:1px solid #e5e5e5;">
+          <h2 style="color:#dc2626;margin-top:0;">Documents Not Approved ❌</h2>
+          <p style="color:#444;font-size:15px;">Dear <strong>${brandName}</strong>,</p>
+          <p style="color:#444;font-size:15px;">Your documents were not approved.</p>
+          ${reason ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:16px 0;">
+            <p style="margin:0;font-size:14px;color:#dc2626;"><strong>Reason:</strong> ${reason}</p>
+          </div>` : ""}
+          <p style="color:#444;font-size:15px;">Please login and re-upload your documents.</p>
+          <a href="https://eldistributor.com/company/login"
+             style="display:inline-block;background:#1a1a1a;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px;">
+            Login & Re-upload →
+          </a>
+        </div>
+      </div>`;
+  }
+
+  await transporter.sendMail({
+    from: process.env.EMAIL_FROM,
+    to:   toEmail,
+    subject,
+    html,
+  });
+};
+
+
 const sendForgotPasswordEmail = async ({ toEmail, brandName, tempPassword }) => {
   await transporter.sendMail({
     from: process.env.EMAIL_FROM,
@@ -348,6 +395,7 @@ module.exports = {
   sendNoBidEmail,
   sendOrderCancelledEmail,
   sendOrderWonEmail,
+  sendCompanyDocumentEmail,
 };
 
 
