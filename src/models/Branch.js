@@ -8,6 +8,7 @@ const branchSchema = new mongoose.Schema(
     accountType: { type: String, enum: ["Supplier", "Buyer"], required: true },
     managerName: { type: String, required: true, trim: true },
     phone:       { type: String, required: true, trim: true },
+    branchNo:    { type: String, required: true, trim: true },
     email:       { type: String, required: true, unique: true, lowercase: true, trim: true },
     password:    { type: String, required: true },
 

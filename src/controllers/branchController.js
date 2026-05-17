@@ -18,7 +18,7 @@ const {
 // ═══════════════════════════════════════════════════════════
 exports.addBranch = async (req, res) => {
   try {
-    const { managerName, phone, email, password } = req.body;
+    const { managerName, phone, email, password, branchNo  } = req.body;
 
     if (!managerName || !phone || !email || !password) {
       return res.status(400).json({
@@ -47,6 +47,7 @@ exports.addBranch = async (req, res) => {
       companyName:      company.brandName,
       accountType:      company.accountType,
       managerName,
+      branchNo,
       phone,
       email,
       password:         hashedPassword,
@@ -81,6 +82,8 @@ exports.addBranch = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
 
 // ═══════════════════════════════════════════════════════════
 //  STEP 0.2 — Branch completes profile (address + bank)
