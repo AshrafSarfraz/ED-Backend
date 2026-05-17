@@ -512,6 +512,65 @@ exports.toggleBranchActive = async (req, res) => {
   }
 };
 
+// controllers/branchController.js mein add karo:
+exports.getCompanyBranchItems = async (req, res) => {
+  try {
+    const SupplierItem = require("../models/supplier/supplierCatalog");
+    const items = await SupplierItem.find({ companyId: req.company._id })
+      .populate("platformItemId", "name image unit")
+      .populate("categoryId",     "name")
+      .populate("countryId",      "name code")
+      .populate("branchId",       "managerName branchNo email")
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, total: items.length, data: items });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getBranchDetail = async (req, res) => {
+  try {
+    const SupplierItem = require("../models/supplier/supplierCatalog");
+
+    const branch = await Branch.findById(req.params.branchId)
+      .select("-password")
+      .populate("companyId", "brandName email accountType");
+
+    if (!branch) {
+      return res.status(404).json({ success: false, message: "Branch not found" });
+    }
+
+    // Company sirf apni branch dekh sakti hai
+    if (req.company && branch.companyId._id.toString() !== req.company._id.toString()) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    let items = [];
+    if (branch.accountType === "Supplier") {
+      items = await SupplierItem.find({ branchId: branch._id })
+        .populate("platformItemId", "name image unit")
+        .populate("categoryId",     "name")
+        .populate("countryId",      "name code")
+        .sort({ createdAt: -1 });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        branch,
+        totalItems: items.length,
+        items,
+      },
+    });
+  } catch (err) {
+    console.error("getBranchDetail error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
 
 
 // const Branch = require("../models/Branch");
