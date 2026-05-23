@@ -90,33 +90,69 @@ exports.addBranch = async (req, res) => {
 //  PUT /api/branch/profile/complete
 //  Auth: Branch token
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+//  STEP 0.2 — Branch completes profile
+//  PUT /api/branch/profile/complete
+//  Auth: Branch token
+//
+//  BUYER    → address + phone only
+//  SUPPLIER → address + warehouseAddress + bankDetails + phone
+// ═══════════════════════════════════════════════════════════
 exports.completeProfile = async (req, res) => {
   try {
-    const { address, bankDetails, warehouseAddress } = req.body;
+    const { address, bankDetails, warehouseAddress, phone } = req.body;
+    const accountType = req.branch.accountType;
 
-    if (!address) {
-      return res.status(400).json({ success: false, message: "Address is required" });
-    }
-
-    if (!bankDetails?.accountName || !bankDetails?.accountNumber || 
-        !bankDetails?.iban || !bankDetails?.bankName) {
+    // ── Address: dono ke liye required ──────────────────────
+    if (!address || !address.address || !address.city) {
       return res.status(400).json({
         success: false,
-        message: "Complete bank details are required",
+        message: "Address (address, city) is required",
       });
     }
 
+    // ── Phone: dono ke liye required ────────────────────────
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    // ── Base update (Buyer + Supplier dono ke liye) ─────────
     const updateData = {
-      address,      // ← object: { lat, lng, address, area, city }
-      bankDetails,
+      address,
+      phone,
       registrationStep: 2,
     };
 
-    // Supplier ke liye warehouseAddress
-    if (req.branch.accountType === "Supplier" && warehouseAddress) {
+    // ── Supplier ke liye extra fields ───────────────────────
+    if (accountType === "Supplier") {
+
+      if (!warehouseAddress || !warehouseAddress.address) {
+        return res.status(400).json({
+          success: false,
+          message: "Warehouse address is required for Supplier",
+        });
+      }
+
+      if (
+        !bankDetails?.accountName   ||
+        !bankDetails?.accountNumber ||
+        !bankDetails?.iban          ||
+        !bankDetails?.bankName
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Complete bank details required for Supplier (accountName, accountNumber, iban, bankName)",
+        });
+      }
+
       updateData.warehouseAddress = warehouseAddress;
+      updateData.bankDetails      = bankDetails;
     }
 
+    // ── Save ────────────────────────────────────────────────
     const branch = await Branch.findByIdAndUpdate(
       req.branch._id,
       updateData,
@@ -125,17 +161,118 @@ exports.completeProfile = async (req, res) => {
 
     res.json({
       success: true,
-      message: branch.accountType === "Supplier"
-        ? "Profile updated. Now add your catalog items."
-        : "Profile complete. Awaiting admin approval.",
+      message:
+        accountType === "Supplier"
+          ? "Profile complete. Now add your catalog items."
+          : "Profile complete. Awaiting admin approval.",
       data: branch,
     });
+
   } catch (err) {
     console.error("completeProfile error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
+
+// ═══════════════════════════════════════════════════════════
+//  ADMIN — Upload Contract PDF  (Buyer + Supplier dono ke liye)
+//  POST /api/branch/admin/branches/:id/upload-contract
+//  Auth: Admin token  |  multipart: field name = "contract"
+//
+//  ⚠️  Account status pe koi asar NAHI — sirf document save hota hai
+// ═══════════════════════════════════════════════════════════
+exports.uploadContract = async (req, res) => {
+  try {
+    const branch = await Branch.findById(req.params.id);
+    if (!branch) {
+      return res.status(404).json({ success: false, message: "Branch not found" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Contract PDF file is required" });
+    }
+
+    const url = await uploadToFirebase(
+      req.file.buffer,
+      req.file.originalname,
+      `contracts/${branch._id}`
+    );
+
+    // Sirf contractPdf field update hota hai — status/isActive unchanged
+    await Branch.findByIdAndUpdate(branch._id, { contractPdf: url });
+
+    res.json({
+      success: true,
+      message: "Contract uploaded successfully",
+      data: { contractPdf: url },
+    });
+  } catch (err) {
+    console.error("uploadContract error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+// ═══════════════════════════════════════════════════════════
+//  ADMIN — Upload PDC Image + Set PDC Limit  (Buyer only)
+//  POST /api/branch/admin/branches/:id/upload-pdc
+//  Auth: Admin token  |  multipart: field name = "pdcImage"
+//  Body: { pdcAmount: Number }
+//
+//  ⚠️  Account status pe koi asar NAHI — sirf document save hota hai
+// ═══════════════════════════════════════════════════════════
+exports.uploadPdc = async (req, res) => {
+  try {
+    const branch = await Branch.findById(req.params.id);
+    if (!branch) {
+      return res.status(404).json({ success: false, message: "Branch not found" });
+    }
+
+    if (branch.accountType !== "Buyer") {
+      return res.status(403).json({
+        success: false,
+        message: "PDC is only for Buyer branches",
+      });
+    }
+
+    const { pdcAmount } = req.body;
+    if (!pdcAmount || isNaN(pdcAmount)) {
+      return res.status(400).json({
+        success: false,
+        message: "pdcAmount (number) is required",
+      });
+    }
+
+    // Image optional — pehle se ho toh replace karo, nahi toh existing rakho
+    let pdcImageUrl = branch.pdcImage;
+    if (req.file) {
+      pdcImageUrl = await uploadToFirebase(
+        req.file.buffer,
+        req.file.originalname,
+        `pdc/${branch._id}`
+      );
+    }
+
+    // Sirf PDC fields update — status/isActive unchanged
+    await Branch.findByIdAndUpdate(branch._id, {
+      pdcImage:  pdcImageUrl,
+      pdcAmount: Number(pdcAmount),
+    });
+
+    res.json({
+      success: true,
+      message: "PDC details saved successfully",
+      data: {
+        pdcImage:  pdcImageUrl,
+        pdcAmount: Number(pdcAmount),
+      },
+    });
+  } catch (err) {
+    console.error("uploadPdc error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 exports.uploadContract = async (req, res) => {
   try {
     const branch = await Branch.findById(req.params.id);
