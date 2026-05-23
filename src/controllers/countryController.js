@@ -1,10 +1,22 @@
 const Country = require("../models/Country");
 
-// GET /api/countries — Public
+// GET /api/countries — Branch only (active, protectBranch)
 exports.getCountries = async (req, res) => {
   try {
     const countries = await Country.find({ isActive: true })
       .select("name code")
+      .sort({ name: 1 });
+    res.json({ success: true, total: countries.length, data: countries });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// GET /api/countries/all — Admin only (all records + isActive)
+exports.getAllCountriesAdmin = async (req, res) => {
+  try {
+    const countries = await Country.find()
+      .select("name code isActive")
       .sort({ name: 1 });
     res.json({ success: true, total: countries.length, data: countries });
   } catch (err) {
@@ -17,7 +29,6 @@ exports.addCountry = async (req, res) => {
   try {
     const { name, code } = req.body;
     if (!name) return res.status(400).json({ success: false, message: "name is required" });
-
     const country = await Country.create({ name, code });
     res.status(201).json({ success: true, data: country });
   } catch (err) {
@@ -49,7 +60,7 @@ exports.toggleCountry = async (req, res) => {
     if (!country) return res.status(404).json({ success: false, message: "Country not found" });
     country.isActive = !country.isActive;
     await country.save();
-    res.json({ success: true, message: `Country ${country.isActive ? "activated" : "deactivated"}`, data: { isActive: country.isActive } });
+    res.json({ success: true, data: { isActive: country.isActive } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }

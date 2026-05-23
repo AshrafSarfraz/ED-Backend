@@ -89,12 +89,7 @@ exports.addBranch = async (req, res) => {
 //  STEP 0.2 — Branch completes profile (address + bank)
 //  PUT /api/branch/profile/complete
 //  Auth: Branch token
-// ═══════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════
-//  STEP 0.2 — Branch completes profile
-//  PUT /api/branch/profile/complete
-//  Auth: Branch token
-//
+
 //  BUYER    → address + phone only
 //  SUPPLIER → address + warehouseAddress + bankDetails + phone
 // ═══════════════════════════════════════════════════════════
