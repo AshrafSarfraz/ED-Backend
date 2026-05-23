@@ -98,44 +98,36 @@ exports.addBranch = async (req, res) => {
 //  BUYER    → address + phone only
 //  SUPPLIER → address + warehouseAddress + bankDetails + phone
 // ═══════════════════════════════════════════════════════════
+
 exports.completeProfile = async (req, res) => {
   try {
-    const { address, bankDetails, warehouseAddress, phone } = req.body;
+    const { address, bankDetails, warehouseAddress } = req.body;
     const accountType = req.branch.accountType;
-
-    // ── Address: dono ke liye required ──────────────────────
+ 
+    // Address required — dono ke liye
     if (!address || !address.address || !address.city) {
       return res.status(400).json({
         success: false,
-        message: "Address (address, city) is required",
+        message: "Address aur City required hain",
       });
     }
-
-    // ── Phone: dono ke liye required ────────────────────────
-    if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number is required",
-      });
-    }
-
-    // ── Base update (Buyer + Supplier dono ke liye) ─────────
+ 
+    // Base update — Buyer + Supplier dono
     const updateData = {
       address,
-      phone,
       registrationStep: 2,
     };
-
-    // ── Supplier ke liye extra fields ───────────────────────
+ 
+    // Supplier ke liye extra fields
     if (accountType === "Supplier") {
-
+ 
       if (!warehouseAddress || !warehouseAddress.address) {
         return res.status(400).json({
           success: false,
-          message: "Warehouse address is required for Supplier",
+          message: "Warehouse address required hai Supplier ke liye",
         });
       }
-
+ 
       if (
         !bankDetails?.accountName   ||
         !bankDetails?.accountNumber ||
@@ -144,30 +136,28 @@ exports.completeProfile = async (req, res) => {
       ) {
         return res.status(400).json({
           success: false,
-          message: "Complete bank details required for Supplier (accountName, accountNumber, iban, bankName)",
+          message: "Bank details required hain Supplier ke liye",
         });
       }
-
+ 
       updateData.warehouseAddress = warehouseAddress;
       updateData.bankDetails      = bankDetails;
     }
-
-    // ── Save ────────────────────────────────────────────────
+ 
     const branch = await Branch.findByIdAndUpdate(
       req.branch._id,
       updateData,
       { new: true, runValidators: true }
     ).select("-password");
-
+ 
     res.json({
       success: true,
-      message:
-        accountType === "Supplier"
-          ? "Profile complete. Now add your catalog items."
-          : "Profile complete. Awaiting admin approval.",
+      message: accountType === "Supplier"
+        ? "Profile complete. Catalog items add karo."
+        : "Profile complete. Admin approval ka wait karo.",
       data: branch,
     });
-
+ 
   } catch (err) {
     console.error("completeProfile error:", err);
     res.status(500).json({ success: false, message: "Server error" });
