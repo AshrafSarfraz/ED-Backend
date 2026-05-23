@@ -4,7 +4,7 @@ const { getCountries, addCountry, updateCountry, toggleCountry, deleteCountry } 
 const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
 
 // branch
-router.get("/",          protectAdmin, adminOnly,   getCountries);                    // Public
+router.get("/",           getCountries);                    // Public
 
 
 // admin 

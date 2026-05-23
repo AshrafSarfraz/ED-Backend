@@ -5,7 +5,7 @@ const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
 
 
 // branch 
-router.get("/",            protectAdmin, adminOnly,        getCategories);                   // Public
+router.get("/",                 getCategories);                   // Public
 
 
 // admin
