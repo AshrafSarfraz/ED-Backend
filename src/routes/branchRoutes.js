@@ -73,7 +73,8 @@ const {
   getCompanyBranchItems,
   getBranchDetail,
   uploadContract,       // ← already in controller
-  uploadPdc,            // ← already in controller
+  uploadPdc,
+  updateBranchProfile,            // ← already in controller
 } = require("../controllers/branchController");
 
 const { protectBranch }  = require("../middleware/protectBranch");
@@ -89,6 +90,7 @@ router.post("/forgot-password", forgotPassword);
 router.get ("/me",               protectBranch, getMyProfile);
 router.put ("/change-password",  protectBranch, changePassword);
 router.put ("/profile/complete", protectBranch, completeProfile);
+router.put("/profile/update", protectBranch, updateBranchProfile);
 
 
 // ─── Company Protected ────────────────────────────────────────────────────────

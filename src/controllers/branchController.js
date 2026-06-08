@@ -121,6 +121,35 @@ exports.completeProfile = async (req, res) => {
   }
 };
 
+exports.updateBranchProfile = async (req, res) => {
+  try {
+    const { phone, address, warehouseAddress, bankDetails } = req.body;
+
+    const updateData = {};
+    if (phone)            updateData.phone            = phone;
+    if (address)          updateData.address          = address;
+    if (warehouseAddress) updateData.warehouseAddress = warehouseAddress;
+    if (bankDetails)      updateData.bankDetails      = bankDetails;
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ success: false, message: "Nothing to update" });
+    }
+
+    const branch = await Branch.findByIdAndUpdate(req.branch._id, updateData, {
+      new: true,
+      runValidators: true,
+    })
+      .select("-password")
+      .populate("companyId", "brandName email accountType companyLogo tradeLicenseNumber tradeLicenseImage tradeLicenseExpiry");
+
+    res.json({ success: true, message: "Profile updated successfully", data: branch });
+  } catch (err) {
+    console.error("updateBranchProfile error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
 // ═══════════════════════════════════════════════════════════
 //  ADMIN — Upload Contract PDF  (Buyer + Supplier)
 //  POST /api/branch/admin/branches/:id/upload-contract
