@@ -271,7 +271,11 @@ exports.branchLogin = async (req, res) => {
         status:            branch.status,
         registrationStep:  branch.registrationStep,
         isPasswordChanged: branch.isPasswordChanged,
-        company:           branch.companyId,   // <-- poora company object (logo + license)
+        company: {
+          logo:               branch.companyId?.companyLogo || null,
+          tradeLicenseImage:  branch.companyId?.tradeLicenseImage || null,
+          tradeLicenseExpiry: branch.companyId?.tradeLicenseExpiry || null,
+        },
       },
     });
   } catch (err) {
