@@ -304,7 +304,7 @@ exports.getMyProfile = async (req, res) => {
   try {
     const branch = await Branch.findById(req.branch._id)
       .select("-password")
-      .populate("companyId", "brandName email accountType");
+      .populate("companyId", "brandName email accountType companyLogo tradeLicenseNumber tradeLicenseImage tradeLicenseExpiry");
     res.json({ success: true, data: branch });
   } catch (err) {
     console.error("getMyProfile error:", err);
