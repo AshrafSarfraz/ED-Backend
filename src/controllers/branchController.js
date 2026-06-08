@@ -234,7 +234,8 @@ exports.branchLogin = async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: "Email and password are required" });
 
-    const branch = await Branch.findOne({ email });
+    const branch = await Branch.findOne({ email })
+      .populate("companyId", "brandName email accountType companyLogo tradeLicenseNumber tradeLicenseImage tradeLicenseExpiry");
     if (!branch) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
     if (branch.status !== "approved") {
@@ -255,13 +256,22 @@ exports.branchLogin = async (req, res) => {
       token,
       data: {
         _id:               branch._id,
-        companyId:         branch.companyId,
         companyName:       branch.companyName,
         accountType:       branch.accountType,
         managerName:       branch.managerName,
+        phone:             branch.phone,
+        branchNo:          branch.branchNo,
         email:             branch.email,
+        address:           branch.address,
+        warehouseAddress:  branch.warehouseAddress,
+        bankDetails:       branch.bankDetails,
+        pdcImage:          branch.pdcImage,
+        pdcAmount:         branch.pdcAmount,
+        branchLogo:        branch.branchLogo,
+        status:            branch.status,
         registrationStep:  branch.registrationStep,
         isPasswordChanged: branch.isPasswordChanged,
+        company:           branch.companyId,   // <-- poora company object (logo + license)
       },
     });
   } catch (err) {
