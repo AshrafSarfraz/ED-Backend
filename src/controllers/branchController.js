@@ -296,6 +296,7 @@ exports.branchLogin = async (req, res) => {
         bankDetails:       branch.bankDetails,
         pdcImage:          branch.pdcImage,
         pdcAmount:         branch.pdcAmount,
+        contractPdf:       branch.contractPdf, 
         branchLogo:        branch.branchLogo,
         status:            branch.status,
         registrationStep:  branch.registrationStep,
