@@ -57,6 +57,31 @@ const getUsedPDC = async (branchId) => {
   return (pendingOrders[0]?.total || 0) + (unpaidInvoices[0]?.total || 0);
 };
 
+// ─── Cancel ho sakta hai ya nahi (ek hi jagah rule) ───
+// pending          → bidding start se 2 min pehle tak
+// in_bidding       → sirf jab bidding LIVE nahi (no supplier ya window khatam)
+// live bidding     → cancel block
+const computeCanCancel = ({ status, bidDate, biddingEndsAt, supplierCount }) => {
+  const now = new Date();
+
+  if (status === "pending") {
+    if (!bidDate) return false;
+    const cutoff = new Date(new Date(bidDate).getTime() - CANCEL_CUTOFF_MIN * 60 * 1000);
+    return now < cutoff;
+  }
+
+  if (status === "in_bidding") {
+    const started = bidDate ? now >= new Date(bidDate) : true;
+    const ended   = biddingEndsAt ? now >= new Date(biddingEndsAt) : false;
+    const liveWindow = started && !ended;
+    const hasSupplier = (supplierCount || 0) > 0;
+    // bidding "ho rahi hai" = live window + supplier maujood → cancel nahi
+    return !(liveWindow && hasSupplier);
+  }
+
+  return false;
+};
+
 // ═══════════════════════════════════════════════════════
 //  BUYER — Place Order
 // ═══════════════════════════════════════════════════════
@@ -107,7 +132,6 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
-    // ─── Min + Max nikalo (yehi order pe save hongi) ───
     const prices          = supplierItems.map((s) => s.pricePerUnit);
     const minPrice        = Math.min(...prices);
     const maxPrice        = Math.max(...prices);
@@ -138,7 +162,6 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
-    // ─── Bidding day decide (DB settings cutoff se) ───
     const settings = await getBiddingSettings();
     const CUTOFF   = settings.BIDDING_CUTOFF_HOUR;
 
@@ -220,7 +243,7 @@ exports.getMyOrders = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  BUYER — Single Order Bidding Status (live + won + saved + retry)
+//  BUYER — Single Order Bidding Status (live + won + saved + retry + canCancel)
 //  GET /api/buyer/orders/:orderId/bidding-status
 // ═══════════════════════════════════════════════════════
 exports.getOrderBiddingStatus = async (req, res) => {
@@ -246,7 +269,6 @@ exports.getOrderBiddingStatus = async (req, res) => {
 
     const blockedAmount = maxPrice ? Math.round(maxPrice * qty * 100) / 100 : null;
 
-    // BulkOrder se winningPrice + biddingEndsAt + retryCount
     const bulk = order.bulkOrderId
       ? await BulkOrder.findById(order.bulkOrderId).select(
           "winningPrice biddingEndsAt status retryCount"
@@ -266,10 +288,10 @@ exports.getOrderBiddingStatus = async (req, res) => {
       maxAmount:     maxPrice ? Math.round(maxPrice * qty * 100) / 100 : null,
       blockedAmount,
       biddingEndsAt: bulk?.biddingEndsAt || order.bidDate,
-      bidDate:       order.bidDate,           // ← cancel cutoff ke liye
+      bidDate:       order.bidDate,
       status:        order.status,
-      retryCount:    bulk?.retryCount || 1,   // ← retry day (1/2/3)
-      maxRetries:    MAX_RETRIES,             // ← 3
+      retryCount:    bulk?.retryCount || 1,
+      maxRetries:    MAX_RETRIES,
     };
 
     // ─── WON phase ───────────────────────────────────────
@@ -289,11 +311,12 @@ exports.getOrderBiddingStatus = async (req, res) => {
           finalAmount,
           saved,
           savedPercent: blockedAmount ? Math.round((saved / blockedAmount) * 100) : 0,
+          canCancel:    false,
         },
       });
     }
 
-    // ─── LIVE phase (in_bidding) ─────────────────────────
+    // ─── PENDING + LIVE (in_bidding) ─────────────────────
     let currentLowestRate = null;
     let bidCount          = 0;
     let supplierCount     = 0;
@@ -307,7 +330,6 @@ exports.getOrderBiddingStatus = async (req, res) => {
       currentLowestRate = lowest?.pricePerUnit ?? null;
       bidCount          = await Bid.countDocuments({ bulkOrderId: order.bulkOrderId });
 
-      // Kitne supplier is item + country pe abhi available hain
       supplierCount = await SupplierItem.countDocuments({
         platformItemId:   order.platformItemId._id,
         countryId:        order.countryId._id,
@@ -315,11 +337,25 @@ exports.getOrderBiddingStatus = async (req, res) => {
         isAvailableToday: true,
       });
 
-      // Window khatam hua ya nahi
       if (bulk?.biddingEndsAt) {
         windowEnded = new Date(bulk.biddingEndsAt) <= new Date();
       }
+    } else if (order.status === "pending") {
+      // pending pe bhi supplier count chahiye canCancel ke liye (optional, yahan zaroori nahi)
+      supplierCount = await SupplierItem.countDocuments({
+        platformItemId:   order.platformItemId._id,
+        countryId:        order.countryId._id,
+        isListed:         true,
+        isAvailableToday: true,
+      });
     }
+
+    const canCancel = computeCanCancel({
+      status:        order.status,
+      bidDate:       order.bidDate,
+      biddingEndsAt: bulk?.biddingEndsAt,
+      supplierCount,
+    });
 
     return res.json({
       success: true,
@@ -334,6 +370,7 @@ exports.getOrderBiddingStatus = async (req, res) => {
         supplierCount,
         noSupplier:  supplierCount === 0,
         windowEnded,
+        canCancel,                          // ← backend decide karta hai
       },
     });
   } catch (err) {
@@ -343,7 +380,9 @@ exports.getOrderBiddingStatus = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  BUYER — Cancel Order  (sirf "pending", bidding start se 2 min pehle tak)
+//  BUYER — Cancel Order
+//  pending  → bidding start se 2 min pehle tak
+//  in_bidding → sirf jab bidding LIVE nahi (no supplier / window khatam)
 // ═══════════════════════════════════════════════════════
 exports.cancelOrder = async (req, res) => {
   try {
@@ -360,22 +399,42 @@ exports.cancelOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (order.status !== "pending") {
+    if (order.status !== "pending" && order.status !== "in_bidding") {
       return res.status(400).json({
         success: false,
-        message: order.status === "in_bidding"
-          ? "Bidding in progress — cannot cancel"
-          : `Cannot cancel — status: ${order.status}`,
+        message: `Cannot cancel — status: ${order.status}`,
       });
     }
 
-    const biddingStart = new Date(order.bidDate);
-    const cancelCutoff = new Date(biddingStart.getTime() - CANCEL_CUTOFF_MIN * 60 * 1000);
+    // Live bidding info nikalo
+    let biddingEndsAt = null;
+    let supplierCount = 0;
 
-    if (new Date() >= cancelCutoff) {
+    if (order.status === "in_bidding" && order.bulkOrderId) {
+      const bulk = await BulkOrder.findById(order.bulkOrderId).select("biddingEndsAt");
+      biddingEndsAt = bulk?.biddingEndsAt || null;
+    }
+
+    supplierCount = await SupplierItem.countDocuments({
+      platformItemId:   order.platformItemId,
+      countryId:        order.countryId,
+      isListed:         true,
+      isAvailableToday: true,
+    });
+
+    const allowed = computeCanCancel({
+      status:        order.status,
+      bidDate:       order.bidDate,
+      biddingEndsAt,
+      supplierCount,
+    });
+
+    if (!allowed) {
       return res.status(400).json({
         success: false,
-        message: "Cannot cancel — bidding starts in less than 2 minutes",
+        message: order.status === "pending"
+          ? "Cannot cancel — bidding starts in less than 2 minutes"
+          : "Bidding in progress — cannot cancel right now",
       });
     }
 
@@ -481,8 +540,6 @@ exports.getMyInvoices = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-
 
 
 // // 📁 controllers/buyer/buyerOrder.js
