@@ -1,3 +1,4 @@
+// 📁 models/buyer/buyerOrder.js
 const mongoose = require("mongoose");
 const { El_Distributor } = require("../../config/db");
 
@@ -36,7 +37,11 @@ const buyerOrderSchema = new mongoose.Schema(
     packedStatus:    { type: Boolean, default: false },
     bulkOrderId:     { type: mongoose.Schema.Types.ObjectId, ref: "BulkOrder", default: null },
     bidDate:         { type: Date,    default: null },
-    estimatedAmount: { type: Number,  default: 0 },
+
+    // ─── PDC / Bidding price snapshot (order place ke waqt) ───
+    minPrice:        { type: Number, default: null },  // ← NEW
+    maxPrice:        { type: Number, default: null },  // ← NEW  (isi pe PDC block hoti hai)
+    estimatedAmount: { type: Number, default: 0 },     // maxPrice × quantity
   },
   { timestamps: true }
 );

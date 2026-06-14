@@ -1,3 +1,4 @@
+// 📁 cron/biddingCron.js
 const cron = require("node-cron");
 const BuyerOrder   = require("../models/buyer/buyerOrder");
 const BulkOrder    = require("../models/BulkOrder");
@@ -6,27 +7,17 @@ const PlatformItem = require("../models/PlatformItem");
 const Country      = require("../models/Country");
 const Invoice      = require("../models/invoice");
 const SupplierItem = require("../models/supplier/supplierCatalog");
-const Branch       = require("../models/Branch"); // ← add karo
+const Branch       = require("../models/Branch");
+const { getBiddingSettings } = require("./settingService");
 const {
   sendNoBidEmail,
   sendOrderCancelledEmail,
   sendOrderWonEmail,
 } = require("../utils/sendEmail");
 
-// ═══════════════════════════════════════════════
-// ⚙️  SETTINGS
-// ═══════════════════════════════════════════════
-const SETTINGS = {
-  BULK_ORDER_CRON:     "45 15 * * *",
-  WINNER_CRON:         "58 15 * * *",
-  BIDDING_END_UTC_HR:  13,
-  BIDDING_END_UTC_MIN: 55,
-  BIDDING_START_QATAR: 18,
-};
-
-module.exports = { SETTINGS }; // ← export karo
-
-const COMMISSION_RATE = 0.03;
+// ─── Active job handles (taake stop/reschedule kar sakein) ───
+let biddingStartJob = null;
+let winnerJob       = null;
 
 const getQatarToday = () => {
   const today = new Date();
@@ -42,9 +33,9 @@ const getQatarTomorrow = () => {
 };
 
 // ═══════════════════════════════════════════════
-// Bidding Start Cron
+// 1) Bidding Start logic
 // ═══════════════════════════════════════════════
-cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
+const runBiddingStart = async (settings) => {
   console.log("⏰ Bidding Start Cron...");
   try {
     const today    = getQatarToday();
@@ -59,7 +50,6 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
       console.log("❌ Koi pending order nahi");
       return;
     }
-
     console.log(`📦 ${pendingOrders.length} pending orders mile`);
 
     const groups = {};
@@ -72,7 +62,6 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
           isListed:         true,
           isAvailableToday: true,
         });
-
         const prices   = supplierItems.map((s) => s.pricePerUnit);
         const minPrice = prices.length > 0 ? Math.min(...prices) : null;
         const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
@@ -90,8 +79,9 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
       groups[key].buyerOrderIds.push(order._id);
     }
 
+    // biddingEndsAt = winner cron ke time pe (DB settings se)
     const biddingEndsAt = new Date();
-    biddingEndsAt.setUTCHours(SETTINGS.BIDDING_END_UTC_HR, SETTINGS.BIDDING_END_UTC_MIN, 0, 0);
+    biddingEndsAt.setUTCHours(settings.WINNER_HOUR - 3, settings.WINNER_MIN, 0, 0);
 
     for (const key of Object.keys(groups)) {
       const g = groups[key];
@@ -106,7 +96,6 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
         const newOrderIds = g.buyerOrderIds.filter(
           (id) => !existingBulk.buyerOrderIds.map(String).includes(String(id))
         );
-
         if (newOrderIds.length > 0) {
           await BulkOrder.findByIdAndUpdate(existingBulk._id, {
             $inc:  { totalQuantity: g.totalQuantity },
@@ -138,7 +127,6 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
           minPrice:       g.minPrice,
           maxPrice:       g.maxPrice,
         });
-
         await BuyerOrder.updateMany(
           { _id: { $in: g.buyerOrderIds } },
           { status: "in_bidding", bulkOrderId: bulkOrder._id }
@@ -149,16 +137,15 @@ cron.schedule(SETTINGS.BULK_ORDER_CRON, async () => {
   } catch (err) {
     console.error("Bidding Start error:", err);
   }
-}, { timezone: "Asia/Qatar" });
+};
 
 // ═══════════════════════════════════════════════
-// Winner Select Cron
+// 2) Winner Select logic
 // ═══════════════════════════════════════════════
-cron.schedule(SETTINGS.WINNER_CRON, async () => {
+const runWinnerSelect = async (settings) => {
   console.log("⏰ Winner Select Cron...");
   try {
     const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
-
     if (activeBulkOrders.length === 0) {
       console.log("❌ Koi active bulk order nahi");
       return;
@@ -191,11 +178,10 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
             });
           }
           console.log(`❌ Cancelled: ${bulkOrder._id}`);
-
         } else {
           const tomorrow          = getQatarTomorrow();
           const nextBiddingEndsAt = new Date(tomorrow);
-          nextBiddingEndsAt.setUTCHours(SETTINGS.BIDDING_END_UTC_HR, SETTINGS.BIDDING_END_UTC_MIN, 0, 0);
+          nextBiddingEndsAt.setUTCHours(settings.WINNER_HOUR - 3, settings.WINNER_MIN, 0, 0);
 
           const buyerOrders = await BuyerOrder.find({
             _id: { $in: bulkOrder.buyerOrderIds },
@@ -307,11 +293,11 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
       }).populate("buyerBranchId");
 
       for (const bo of buyerOrders) {
-        const rawTotal            = bo.quantity * winningBid.pricePerUnit;
-        const commissionAmount    = Math.round(rawTotal * 0.02 * 100) / 100;
-        const deliveryAmount      = Math.round(rawTotal * 0.01 * 100) / 100;
-        const totalFeeAmount      = commissionAmount + deliveryAmount;
-        const buyerGrandTotal     = Math.round((rawTotal + totalFeeAmount) * 100) / 100;
+        const rawTotal         = bo.quantity * winningBid.pricePerUnit;
+        const commissionAmount = Math.round(rawTotal * 0.02 * 100) / 100;
+        const deliveryAmount   = Math.round(rawTotal * 0.01 * 100) / 100;
+        const totalFeeAmount   = commissionAmount + deliveryAmount;
+        const buyerGrandTotal  = Math.round((rawTotal + totalFeeAmount) * 100) / 100;
 
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30);
@@ -319,8 +305,8 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
         // ─── Buyer Invoice ─────────────────────────────
-        const buyerCount   = await Invoice.countDocuments();
-        const buyerInvNum  = `INV-B-${dateStr}-${String(buyerCount + 1).padStart(4, "0")}`;
+        const buyerCount  = await Invoice.countDocuments();
+        const buyerInvNum = `INV-B-${dateStr}-${String(buyerCount + 1).padStart(4, "0")}`;
 
         await Invoice.create({
           buyerOrderId:     bo._id,
@@ -401,4 +387,45 @@ cron.schedule(SETTINGS.WINNER_CRON, async () => {
   } catch (err) {
     console.error("Winner Cron error:", err);
   }
-}, { timezone: "Asia/Qatar" });
+};
+
+// ═══════════════════════════════════════════════
+// 3) Schedule / Reschedule
+// ═══════════════════════════════════════════════
+const scheduleCrons = async () => {
+  const s = await getBiddingSettings();
+
+  // Purane jobs band karo
+  if (biddingStartJob) biddingStartJob.stop();
+  if (winnerJob)       winnerJob.stop();
+
+  // cron expression: "min hour * * *" (Asia/Qatar)
+  const startExpr  = `${s.BIDDING_START_MIN} ${s.BIDDING_START_HOUR} * * *`;
+  const winnerExpr = `${s.WINNER_MIN} ${s.WINNER_HOUR} * * *`;
+
+  biddingStartJob = cron.schedule(
+    startExpr,
+    async () => {
+      const latest = await getBiddingSettings();
+      await runBiddingStart(latest);
+    },
+    { timezone: "Asia/Qatar" }
+  );
+
+  winnerJob = cron.schedule(
+    winnerExpr,
+    async () => {
+      const latest = await getBiddingSettings();
+      await runWinnerSelect(latest);
+    },
+    { timezone: "Asia/Qatar" }
+  );
+
+  console.log(`🕒 Crons set → Start: ${startExpr} | Winner: ${winnerExpr} (Qatar)`);
+};
+
+module.exports = {
+  scheduleCrons,
+  runBiddingStart,
+  runWinnerSelect,
+};

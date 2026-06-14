@@ -1,12 +1,12 @@
 require("dotenv").config();
-require("./src/cron/biddingCron");
 const express = require("express");
 const cors = require("cors");
 require("./src/config/db");
+const { scheduleCrons } = require("./src/cron/biddingCron");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -15,26 +15,23 @@ app.use(cors({
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:5174",
-    "http://localhost:5175/",
-    "http://localhost:5176/",
+    "http://localhost:5175",
+    "http://localhost:5176",
     "https://el-distibutor-backend.onrender.com",
-    "admin@eldistributor.com",
-    "company@eldistributor.com",
-    "branch@eldistributor.com",
-    "rider@eldistributor.com",
-
-    "*" // development ke liye
+    "*", // development ke liye — production me hata dena
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.use("/api/admin/auth", require("./src/routes/admin/auth"));
-app.use("/api/admin/settings", require("./src/routes/admin/timeSetting"));
+// ─── Admin ────────────────────────────────────────────────
+app.use("/api/admin/auth",      require("./src/routes/admin/auth"));
+app.use("/api/admin/settings",  require("./src/routes/admin/timeSetting"));
 app.use("/api/admin/dashboard", require("./src/routes/admin/dashboard"));
+app.use("/api/admin",           require("./src/routes/admin/biddingSettings.route")); // ← NEW
 
-
-app.use("/api/becomePartner",   require("./src/routes/becomePartner") );
+// ─── App routes ───────────────────────────────────────────
+app.use("/api/becomePartner",   require("./src/routes/becomePartner"));
 app.use("/api/company",         require("./src/routes/company"));
 app.use("/api/branch",          require("./src/routes/branchRoutes"));
 app.use("/api/countries",       require("./src/routes/countryRoutes"));
@@ -45,23 +42,17 @@ app.use("/api/buyer/catalog",   require("./src/routes/buyer/catalog"));
 app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
 app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
-app.use("/api/buyer/payments", require("./src/routes/payment"));
-
+app.use("/api/buyer/payments",  require("./src/routes/payment"));
 app.use("/api/rider-company",   require("./src/routes/rider/riderCompany"));
-
-
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
 
-
-
-
-
-
+// ─── 404 ──────────────────────────────────────────────────
 app.use((req, res) =>
   res.status(404).json({ success: false, message: "Route not found" })
 );
 
+// ─── Error handler ────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error(err);
   res
@@ -69,6 +60,8 @@ app.use((err, req, res, next) => {
     .json({ success: false, message: err.message || "Internal server error" });
 });
 
-app.listen(PORT, () =>
-  console.log(`🚀 Server running on http://localhost:${PORT}`)
-);
+// ─── Start ────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  scheduleCrons(); // ← DB connect ho chuka hota hai, crons schedule karo
+});
