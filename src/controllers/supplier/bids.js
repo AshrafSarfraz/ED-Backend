@@ -1,6 +1,7 @@
 // 📁 controllers/supplier/bids.js
 const Bid          = require("../../models/Bid");
 const BulkOrder    = require("../../models/BulkOrder");
+const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
 const PlatformItem = require("../../models/PlatformItem");
 const Country      = require("../../models/Country");
@@ -31,7 +32,7 @@ const getMyRank = async (bulkOrderId, myPrice) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  SUPPLIER — Active Biddings
+//  SUPPLIER — Active Biddings  (sirf LIVE window me)
 //  GET /api/supplier/bids/active
 // ═══════════════════════════════════════════════════════
 exports.getActiveBiddings = async (req, res) => {
@@ -66,8 +67,13 @@ exports.getActiveBiddings = async (req, res) => {
     );
 
     const result = [];
+    const now = new Date();
 
     for (const bulk of eligibleOrders) {
+      // ─── Sirf LIVE window me dikhao (time se pehle/baad nahi) ───
+      if (bulk.bidDate && now < new Date(bulk.bidDate)) continue;          // abhi shuru nahi hui
+      if (bulk.biddingEndsAt && now >= new Date(bulk.biddingEndsAt)) continue; // khatam ho gayi
+
       const myRecord = await Bid.findOne({
         bulkOrderId:      bulk._id,
         supplierBranchId: req.branch._id,
@@ -83,9 +89,9 @@ exports.getActiveBiddings = async (req, res) => {
         pricePerUnit: { $ne: null },
       }).sort({ pricePerUnit: 1 });
 
-      const myPrice         = myRecord?.pricePerUnit ?? null;
+      const myPrice             = myRecord?.pricePerUnit ?? null;
       const { rank, totalBids } = await getMyRank(bulk._id, myPrice);
-      const activeSuppliers = await countActiveSuppliers(bulk.platformItemId, bulk.countryId);
+      const activeSuppliers     = await countActiveSuppliers(bulk.platformItemId, bulk.countryId);
 
       const buyerCount = bulk.buyerOrderIds?.length || 0;
 
@@ -104,10 +110,10 @@ exports.getActiveBiddings = async (req, res) => {
         minPrice:        bulk.minPrice,
         maxPrice:        bulk.maxPrice,
         orderValue:      bulk.maxPrice ? Math.round(bulk.maxPrice * bulk.totalQuantity) : null,
-        activeSuppliers,                                   // ← total eligible suppliers
+        activeSuppliers,
         myBid:           myPrice,
-        myRank:          rank,                             // ← meri rank (1 = best)
-        totalBids,                                         // ← kitni bids aayi
+        myRank:          rank,
+        totalBids,
         lowestBid:       lowestBid ? lowestBid.pricePerUnit : null,
         alreadyBid:      !!(myRecord && myRecord.status === "pending"),
       });
@@ -141,6 +147,15 @@ exports.placeBid = async (req, res) => {
       return res.status(404).json({ success: false, message: "Bidding not found or already closed" });
     }
 
+    // ─── Sirf LIVE window me bid (time se pehle/baad nahi) ───
+    const now = new Date();
+    if (bulkOrder.bidDate && now < new Date(bulkOrder.bidDate)) {
+      return res.status(400).json({ success: false, message: "Bidding has not started yet" });
+    }
+    if (bulkOrder.biddingEndsAt && now >= new Date(bulkOrder.biddingEndsAt)) {
+      return res.status(400).json({ success: false, message: "Bidding has already closed" });
+    }
+
     if (bulkOrder.maxPrice && pricePerUnit > bulkOrder.maxPrice) {
       return res.status(400).json({
         success: false,
@@ -168,6 +183,7 @@ exports.placeBid = async (req, res) => {
     });
 
     if (existing) {
+      // ignored tha to ab bid me badal do
       existing.pricePerUnit = pricePerUnit;
       existing.status       = "pending";
       await existing.save();
@@ -198,7 +214,7 @@ exports.placeBid = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  SUPPLIER — Ignore Bidding
+//  SUPPLIER — Ignore Bidding (save + all-ignored turant cancel)
 //  POST /api/supplier/bids/ignore
 // ═══════════════════════════════════════════════════════
 exports.ignoreBidding = async (req, res) => {
@@ -250,6 +266,28 @@ exports.ignoreBidding = async (req, res) => {
         supplierCompanyId: req.branch.companyId,
         pricePerUnit:      null,
         status:            "ignored",
+      });
+    }
+
+    // ─── Agar SAARE eligible suppliers ne ignore kar diya → turant cancel ───
+    const activeSuppliers = await countActiveSuppliers(
+      bulkOrder.platformItemId,
+      bulkOrder.countryId
+    );
+    const ignoredCount = await Bid.countDocuments({
+      bulkOrderId: bulkOrder._id,
+      status:      "ignored",
+    });
+
+    if (activeSuppliers > 0 && ignoredCount >= activeSuppliers) {
+      await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
+      await BuyerOrder.updateMany(
+        { _id: { $in: bulkOrder.buyerOrderIds } },
+        { status: "cancelled", estimatedAmount: 0 }
+      );
+      return res.json({
+        success: true,
+        message: "Bidding ignored. All suppliers ignored — order cancelled (no supplier found).",
       });
     }
 
