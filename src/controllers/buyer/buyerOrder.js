@@ -12,21 +12,31 @@ const { getBiddingSettings } = require("../../cron/settingService");
 
 const CANCEL_CUTOFF_MIN = 2;
 
-const getQatarNow = () => {
-  const now = new Date();
-  return new Date(now.getTime() + 3 * 60 * 60 * 1000);
+// ─── Qatar time helpers (Qatar = UTC+3, cron ke saath bilkul consistent) ───
+const getQatarNowParts = () => {
+  const qatar = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  return {
+    year:  qatar.getUTCFullYear(),
+    month: qatar.getUTCMonth(),
+    day:   qatar.getUTCDate(),
+    hour:  qatar.getUTCHours(),
+  };
 };
 
+// Qatar ki abhi ki hour (cutoff compare ke liye)
+const getQatarHour = () => getQatarNowParts().hour;
+
+// Qatar aaj ke din ka (hour:min) → asli UTC Date
 const getTodayBiddingStart = (settings) => {
-  const start = new Date();
-  start.setUTCHours(settings.BIDDING_START_HOUR - 3, settings.BIDDING_START_MIN, 0, 0);
-  return start;
+  const { year, month, day } = getQatarNowParts();
+  const utcMs = Date.UTC(year, month, day, settings.BIDDING_START_HOUR, settings.BIDDING_START_MIN, 0, 0) - 3 * 60 * 60 * 1000;
+  return new Date(utcMs);
 };
 
 const getTomorrowBiddingStart = (settings) => {
-  const start = getTodayBiddingStart(settings);
-  start.setDate(start.getDate() + 1);
-  return start;
+  const { year, month, day } = getQatarNowParts();
+  const utcMs = Date.UTC(year, month, day + 1, settings.BIDDING_START_HOUR, settings.BIDDING_START_MIN, 0, 0) - 3 * 60 * 60 * 1000;
+  return new Date(utcMs);
 };
 
 const getUsedPDC = async (branchId) => {
@@ -161,8 +171,7 @@ exports.placeOrder = async (req, res) => {
     const settings = await getBiddingSettings();
     const CUTOFF   = settings.BIDDING_CUTOFF_HOUR;
 
-    const qatarNow  = getQatarNow();
-    const qatarHour = qatarNow.getUTCHours();
+    const qatarHour = getQatarHour();
 
     let bidDate, biddingMessage, biddingDateStr;
 

@@ -17,33 +17,49 @@ const {
 let biddingStartJob = null;
 let winnerJob       = null;
 
-// midnight of Qatar today (grouping/filtering ke liye)
-const getQatarToday = () => {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  today.setTime(today.getTime() - 3 * 60 * 60 * 1000);
-  return today;
+// ─────────────────────────────────────────────────────────
+//  Qatar time helpers (Qatar = UTC+3, no DST)
+// ─────────────────────────────────────────────────────────
+
+// Qatar ki abhi ki date+time (as a "fake UTC" Date jiska getUTC* = Qatar wall clock)
+const getQatarNowParts = () => {
+  const nowUtcMs = Date.now();
+  const qatar = new Date(nowUtcMs + 3 * 60 * 60 * 1000);
+  return {
+    year:  qatar.getUTCFullYear(),
+    month: qatar.getUTCMonth(),
+    day:   qatar.getUTCDate(),
+  };
 };
 
-const getQatarTomorrow = () => {
-  const t = getQatarToday();
-  t.setTime(t.getTime() + 24 * 60 * 60 * 1000);
-  return t;
+// Qatar ke aaj ke din ka koi bhi (hour:min) → asli UTC Date
+// Qatar hour h ka UTC = h - 3 (us hi calendar din pe, Date.UTC overflow khud handle karta hai)
+const buildQatarTimeToday = (hour, min) => {
+  const { year, month, day } = getQatarNowParts();
+  // Qatar (year-month-day hour:min) ko UTC ms me: subtract 3h
+  const utcMs = Date.UTC(year, month, day, hour, min, 0, 0) - 3 * 60 * 60 * 1000;
+  return new Date(utcMs);
 };
 
-// kisi din ka bidding START time (Qatar) → UTC Date
-const buildStartAt = (baseDate, settings) => {
-  const d = new Date(baseDate);
-  d.setUTCHours(settings.BIDDING_START_HOUR - 3, settings.BIDDING_START_MIN, 0, 0);
-  return d;
+const buildQatarTimeTomorrow = (hour, min) => {
+  const { year, month, day } = getQatarNowParts();
+  const utcMs = Date.UTC(year, month, day + 1, hour, min, 0, 0) - 3 * 60 * 60 * 1000;
+  return new Date(utcMs);
 };
 
-// kisi din ka bidding END / winner time (Qatar) → UTC Date
-const buildEndAt = (baseDate, settings) => {
-  const d = new Date(baseDate);
-  d.setUTCHours(settings.WINNER_HOUR - 3, settings.WINNER_MIN, 0, 0);
-  return d;
+// Aaj ke pending orders filter karne ke liye Qatar din ki UTC range
+const getQatarDayRange = () => {
+  const { year, month, day } = getQatarNowParts();
+  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0) - 3 * 60 * 60 * 1000);
+  const end   = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0) - 3 * 60 * 60 * 1000);
+  return { start, end };
 };
+
+const buildStartAt = (settings) =>
+  buildQatarTimeToday(settings.BIDDING_START_HOUR, settings.BIDDING_START_MIN);
+
+const buildEndAt = (settings) =>
+  buildQatarTimeToday(settings.WINNER_HOUR, settings.WINNER_MIN);
 
 // Eligible suppliers jinhone na bid ki na ignore kiya → "missed"
 const recordMissedBids = async (bulkOrder) => {
@@ -86,12 +102,12 @@ const recordMissedBids = async (bulkOrder) => {
 const runBiddingStart = async (settings) => {
   console.log("⏰ Bidding Start Cron...");
   try {
-    const today    = getQatarToday();
-    const tomorrow = getQatarTomorrow();
+    const { start: dayStart, end: dayEnd } = getQatarDayRange();
 
+    // Aaj ke (Qatar din) pending orders
     const pendingOrders = await BuyerOrder.find({
       status:  "pending",
-      bidDate: { $gte: today, $lt: tomorrow },
+      bidDate: { $gte: dayStart, $lt: dayEnd },
     });
 
     if (pendingOrders.length === 0) {
@@ -127,8 +143,11 @@ const runBiddingStart = async (settings) => {
       groups[key].buyerOrderIds.push(order._id);
     }
 
-    const biddingStartsAt = buildStartAt(today, settings);
-    const biddingEndsAt   = buildEndAt(today, settings);
+    // ─── FIX: sahi aaj ka start/end Qatar time ───
+    const biddingStartsAt = buildStartAt(settings);
+    const biddingEndsAt    = buildEndAt(settings);
+
+    console.log(`🕒 Start: ${biddingStartsAt.toISOString()} | End: ${biddingEndsAt.toISOString()}`);
 
     for (const key of Object.keys(groups)) {
       const g = groups[key];
@@ -227,7 +246,6 @@ const runWinnerSelect = async (settings) => {
           });
         }
 
-        // jinhone na bid ki na ignore kiya → missed
         await recordMissedBids(bulkOrder);
         console.log(`❌ No supplier — cancelled: ${bulkOrder._id}`);
         continue;
@@ -250,7 +268,6 @@ const runWinnerSelect = async (settings) => {
         { status: "lost" }
       );
 
-      // jinhone na bid ki na ignore kiya → missed
       await recordMissedBids(bulkOrder);
 
       const supplierBranch = await Branch.findById(winningBid.supplierBranchId);
