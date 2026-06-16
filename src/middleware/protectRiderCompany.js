@@ -1,23 +1,31 @@
-const jwt          = require("jsonwebtoken");
-const RiderCompany = require("../models/rider/riderCompany");
+// 📁 middleware/protectDelivery.js
+// Delivery company ka token check — req.deliveryCompany set karta hai
+const jwt = require("jsonwebtoken");
+const DeliveryCompany = require("../models/riderCompany/riderCompany");
 
-exports.protectRiderCompany = async (req, res, next) => {
+exports.protectDelivery = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    let token;
+    if (req.headers.authorization?.startsWith("Bearer")) {
+      token = req.headers.authorization.split(" ")[1];
+    }
     if (!token) {
-      return res.status(401).json({ success: false, message: "No token" });
+      return res.status(401).json({ success: false, message: "Not authorized, no token" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const company = await RiderCompany.findById(decoded.id);
-
-    if (!company || !company.isActive) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (decoded.role !== "delivery") {
+      return res.status(403).json({ success: false, message: "Not a delivery account" });
     }
 
-    req.riderCompany = company;
+    const company = await DeliveryCompany.findById(decoded.id).select("-password");
+    if (!company || !company.isActive) {
+      return res.status(401).json({ success: false, message: "Account not found or inactive" });
+    }
+
+    req.deliveryCompany = company;
     next();
   } catch (err) {
-    res.status(401).json({ success: false, message: "Invalid token" });
+    return res.status(401).json({ success: false, message: "Not authorized, token failed" });
   }
 };

@@ -1,7 +1,6 @@
 const BuyerOrder    = require("../../models/buyer/buyerOrder");
 const BulkOrder     = require("../../models/BulkOrder");
 const Invoice       = require("../../models/invoice");
-const DeliveryOrder = require("../../models/rider/deliveryOrder");
 const Branch        = require("../../models/Branch");
 const Bid           = require("../../models/Bid");
 
@@ -144,7 +143,9 @@ exports.markAllReady = async (req, res) => {
       _id:              req.params.bulkOrderId,
       winnerSupplierId: req.branch._id,
       status:           "awarded",
-    });
+    })
+      .populate("platformItemId", "name image unit")
+      .populate("countryId", "name");
 
     if (!bulkOrder) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -156,13 +157,30 @@ exports.markAllReady = async (req, res) => {
 
     const allPacked = buyerOrders.every((bo) => bo.packedStatus === true);
     if (!allPacked) {
-      return res.status(400).json({
-        success: false,
-        message: "All orders must be packed first",
-      });
+      return res.status(400).json({ success: false, message: "All orders must be packed first" });
     }
 
     const supplierBranch = await Branch.findById(req.branch._id);
+    const settings       = await getDeliverySettings();
+    const now            = new Date();
+
+    // ─── Supplier ready deadline = AGLE din subah 10 baje (Qatar) ───
+    // Bidding 6 PM ko end hoti, supplier ko raat bhar + subah 10 baje tak time.
+    // Agar abhi (ready karne ka waqt) 10 AM ke baad hai aur same/agla din nikal gaya → late.
+    const { hour } = qatarNowParts();
+
+    // ready deadline: agar abhi subah 10 se pehle hai → aaj 10 baje; warna soch:
+    // simple rule — supplier ko 10 AM tak ready karna tha. Agar ready karte waqt
+    // Qatar time 10 baje (READY_HOUR) ke baad hai → supplier late.
+    const supplierLate = hour >= settings.SUPPLIER_READY_HOUR && hour < settings.PICKUP_END_HOUR
+      ? false   // 10–12 ke beech ready kiya = pickup window, on time maan lo
+      : hour >= settings.PICKUP_END_HOUR;  // 12 PM ke baad ready = late
+
+    // ─── Pickup window aur delivery deadline (aaj ke clock times) ───
+    const pickupStart      = qatarTime(settings.PICKUP_START_HOUR, 0);              // 10 AM
+    const pickupEnd        = qatarTime(settings.PICKUP_END_HOUR, 0);                // 12 PM
+    const deliverDeadline  = qatarTime(settings.DELIVER_DEADLINE_HOUR, settings.DELIVER_DEADLINE_MIN); // 8 PM
+    const graceDeadline    = qatarTime(settings.GRACE_HOUR, settings.GRACE_MIN);    // 9 PM
 
     // BuyerOrders → ready_for_pickup
     await BuyerOrder.updateMany(
@@ -170,37 +188,78 @@ exports.markAllReady = async (req, res) => {
       { status: "ready_for_pickup" }
     );
 
-    // BulkOrder → ready
+    // BulkOrder → ready + supplier late info
     await BulkOrder.findByIdAndUpdate(bulkOrder._id, {
-      status:  "ready",
-      readyAt: new Date(),
-      isLate:  false,
+      status:     "ready",
+      readyAt:    now,
+      isLate:     supplierLate,
+      lateReason: supplierLate ? "supplier_late_preparation" : null,
     });
 
-    // DeliveryOrder create
+    // ─── SUPPLIER LATE → 1% penalty supplier invoice se cut ───
+    if (supplierLate) {
+      const penaltyPercent = settings.LATE_PENALTY_PERCENT; // 1
+      const supplierInvoices = await Invoice.find({
+        bulkOrderId: bulkOrder._id,
+        invoiceType: "supplier",
+      });
+      for (const inv of supplierInvoices) {
+        const penalty  = Math.round(inv.grandTotal * (penaltyPercent / 100) * 100) / 100;
+        const newTotal = Math.round((inv.grandTotal - penalty) * 100) / 100;
+        await Invoice.findByIdAndUpdate(inv._id, {
+          latePenaltyPercent: penaltyPercent,
+          latePenaltyAmount:  penalty,
+          grandTotal:         newTotal,
+          amountDue:          newTotal,
+          penaltyNote: `${penaltyPercent}% late delivery penalty deducted (QAR ${penalty}) — order prepared late`,
+        });
+      }
+    }
+
+    // Delivery stops
     const deliveries = buyerOrders.map((bo) => ({
-      buyerOrderId:    bo._id,
-      buyerBranchId:   bo.buyerBranchId._id,
-      buyerName:       bo.buyerBranchId.managerName,
-      buyerPhone:      bo.buyerBranchId.phone,
+      buyerOrderId:  bo._id,
+      buyerBranchId: bo.buyerBranchId._id,
+      buyerName:     bo.buyerBranchId.managerName,
+      buyerPhone:    bo.buyerBranchId.phone,
+      quantity:      bo.quantity,
+      unit:          bulkOrder.platformItemId?.unit,
       deliveryAddress: bo.deliveryAddress,
-      status:          "pending",
+      status:        "pending",
     }));
 
-    await DeliveryOrder.create({
-      bulkOrderId: bulkOrder._id,
+    // DeliveryOrder create
+    const deliveryOrder = await DeliveryOrder.create({
+      bulkOrderId:      bulkOrder._id,
+      supplierBranchId: req.branch._id,
+      item:             bulkOrder.platformItemId?.name,
+      image:            bulkOrder.platformItemId?.image,
+      country:          bulkOrder.countryId?.name,
+      unit:             bulkOrder.platformItemId?.unit,
+      totalQuantity:    bulkOrder.totalQuantity,
       pickupLocation: {
         lat:     supplierBranch?.warehouseAddress?.lat     || null,
         lng:     supplierBranch?.warehouseAddress?.lng     || null,
         address: supplierBranch?.warehouseAddress?.address || null,
       },
+      supplierName:  supplierBranch?.managerName || null,
+      supplierPhone: supplierBranch?.phone || null,
       deliveries,
-      status: "pending",
+      status:           "pending",
+      readyAt:          now,
+      supplierWasLate:  supplierLate,           // delivery order me bhi record
+      pickupWindowStart: pickupStart,
+      pickupWindowEnd:   pickupEnd,
+      deliverDeadline,                          // 8 PM
+      graceDeadline,                            // 9 PM
     });
 
     res.json({
       success: true,
-      message: "All packed! Ready for rider pickup. ✅",
+      message: supplierLate
+        ? "Ready for pickup. Note: prepared late — 1% penalty applied to your invoice."
+        : "All packed! Ready for rider pickup. ✅",
+      data: { deliveryOrderId: deliveryOrder._id, supplierLate },
     });
   } catch (err) {
     console.error("markAllReady error:", err);

@@ -40,10 +40,16 @@ app.use("/api/items",           require("./src/routes/platformItemRoutes"));
 app.use("/api/catalog",         require("./src/routes/supplier/supplierCatalogRoutes"));
 app.use("/api/buyer/catalog",   require("./src/routes/buyer/catalog"));
 app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
+
 app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
 app.use("/api/buyer/payments",  require("./src/routes/payment"));
-app.use("/api/rider-company",   require("./src/routes/rider/riderCompany"));
+
+
+app.use("/api/delivery/auth",   require("./src/routes/riderCompany/RiderAuth"));
+app.use("/api/delivery/orders",   require("./src/routes/riderCompany/riderDelivery"));
+
+
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
 
