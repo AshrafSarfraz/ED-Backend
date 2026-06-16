@@ -569,8 +569,6 @@ exports.getMyInvoices = async (req, res) => {
 //  GET /api/buyer/orders/:orderId/tracking
 //  controllers/buyer/buyerOrder.js me ADD karo
 //
-//  Upar import add karo:
-//    const DeliveryOrder = require("../../models/rider/deliveryOrder");
 // ═══════════════════════════════════════════════════════
 exports.getOrderTracking = async (req, res) => {
   try {
