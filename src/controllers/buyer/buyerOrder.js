@@ -299,7 +299,8 @@ exports.getOrderBiddingStatus = async (req, res) => {
     };
 
     // ─── WON phase ───────────────────────────────────────
-    if (order.status === "won" && bulk?.winningPrice != null) {
+    const WON_STATUSES = ["won", "packed", "ready_for_pickup", "delivered", "return_requested", "returned"];
+    if (WON_STATUSES.includes(order.status) && bulk?.winningPrice != null) {
       const PLATFORM_FEE = 0.03; // 2% commission + 1% delivery (invoice/email ke saath consistent)
 
       const baseRate    = bulk.winningPrice;                              // supplier ko itna milega (8)
