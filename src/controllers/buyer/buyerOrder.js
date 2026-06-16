@@ -9,6 +9,7 @@ const Bid          = require("../../models/Bid");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
 const mongoose     = require("mongoose");
 const { getBiddingSettings } = require("../../cron/settingService");
+const DeliveryOrder = require("../../models/riderCompany/orderDelivery");
 
 const CANCEL_CUTOFF_MIN = 2;
 
@@ -555,6 +556,140 @@ exports.getMyInvoices = async (req, res) => {
     res.json({ success: true, total: invoices.length, data: invoices });
   } catch (err) {
     console.error("getMyInvoices error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
+
+
+// ═══════════════════════════════════════════════════════
+//  BUYER — Order Tracking (delivery progress)
+//  GET /api/buyer/orders/:orderId/tracking
+//  controllers/buyer/buyerOrder.js me ADD karo
+//
+//  Upar import add karo:
+//    const DeliveryOrder = require("../../models/rider/deliveryOrder");
+// ═══════════════════════════════════════════════════════
+exports.getOrderTracking = async (req, res) => {
+  try {
+    if (req.branch.accountType !== "Buyer") {
+      return res.status(403).json({ success: false, message: "Only buyers can access this" });
+    }
+
+    const order = await BuyerOrder.findOne({
+      _id:           req.params.orderId,
+      buyerBranchId: req.branch._id,
+    })
+      .populate("platformItemId", "name image unit")
+      .populate("countryId", "name code");
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // Delivery order (agar bana ho — ready hone ke baad)
+    let delivery = null;
+    if (order.bulkOrderId) {
+      delivery = await DeliveryOrder.findOne({ bulkOrderId: order.bulkOrderId });
+    }
+
+    // Is buyer ka apna stop (delivery ke andar)
+    let myStop = null;
+    if (delivery) {
+      myStop = delivery.deliveries.find(
+        (d) => d.buyerOrderId.toString() === order._id.toString()
+      );
+    }
+
+    // ─── Timeline steps (5 step) ───
+    // 1 won/awarded → Supplier Preparing
+    // 2 packed      → Order Packed
+    // 3 picked      → Dispatched (rider uthaya)
+    // 4 out_for_delivery → In Transit
+    // 5 delivered   → Delivered
+
+    const steps = [
+      {
+        key:   "preparing",
+        title: "Supplier Preparing Order",
+        sub:   "Your order is confirmed and being prepared.",
+        done:  ["won", "packed", "ready_for_pickup", "delivered"].includes(order.status),
+        time:  order.status === "won" ? order.updatedAt : null,
+      },
+      {
+        key:   "packed",
+        title: "Order Packed",
+        sub:   "Your order has been packed and is ready for pickup.",
+        done:  ["packed", "ready_for_pickup", "delivered"].includes(order.status),
+        time:  delivery?.readyAt || null,
+      },
+      {
+        key:   "dispatched",
+        title: "Dispatched",
+        sub:   "Package has been picked up by the courier.",
+        done:  ["ready_for_pickup", "delivered"].includes(order.status) &&
+               !!delivery && ["picked", "out_for_delivery", "delivered"].includes(delivery.status),
+        time:  delivery?.pickedAt || null,
+      },
+      {
+        key:   "in_transit",
+        title: "In Transit",
+        sub:   "Package is on the way to your location.",
+        done:  !!delivery && ["out_for_delivery", "delivered"].includes(delivery.status),
+        time:  null,
+      },
+      {
+        key:   "delivered",
+        title: "Delivered",
+        sub:   "Package delivered to your address.",
+        done:  order.status === "delivered" || myStop?.status === "delivered",
+        time:  myStop?.deliveredAt || delivery?.deliveredAt || null,
+      },
+    ];
+
+    // current step index (last done)
+    let currentStep = 0;
+    steps.forEach((s, i) => { if (s.done) currentStep = i; });
+
+    // progress %
+    const progressPercent = Math.round((currentStep / (steps.length - 1)) * 100);
+
+    res.json({
+      success: true,
+      data: {
+        orderId:       order._id,
+        orderNumber:   `#ORD-${order._id.toString().slice(-6).toUpperCase()}`,
+        itemName:      order.platformItemId?.name,
+        itemImage:     order.platformItemId?.image,
+        unit:          order.platformItemId?.unit,
+        country:       order.countryId?.name,
+        quantity:      order.quantity,
+        status:        order.status,
+
+        // delivery info
+        deliveryStatus: delivery?.status || null,   // pending/picked/out_for_delivery/delivered
+        deliverDeadline: delivery?.deliverDeadline || null,  // 8 PM
+        estimatedWindow: delivery
+          ? { from: delivery.pickupWindowEnd, to: delivery.deliverDeadline }
+          : null,
+
+        // late info
+        isLate:     delivery?.isLate || false,
+        lateBy:     delivery?.lateBy || "none",
+
+        // address
+        deliveryAddress: order.deliveryAddress,
+
+        // timeline
+        steps,
+        currentStep,
+        progressPercent,
+      },
+    });
+  } catch (err) {
+    console.error("getOrderTracking error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
