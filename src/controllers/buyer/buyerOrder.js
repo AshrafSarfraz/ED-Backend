@@ -299,8 +299,13 @@ exports.getOrderBiddingStatus = async (req, res) => {
 
     // ─── WON phase ───────────────────────────────────────
     if (order.status === "won" && bulk?.winningPrice != null) {
-      const wonRate     = bulk.winningPrice;
-      const finalAmount = Math.round(wonRate * qty * 100) / 100;
+      const PLATFORM_FEE = 0.03; // 2% commission + 1% delivery (invoice/email ke saath consistent)
+
+      const baseRate    = bulk.winningPrice;                              // supplier ko itna milega (8)
+      const wonRate     = Math.round(baseRate * (1 + PLATFORM_FEE) * 100) / 100;  // buyer ka rate (8.24)
+      const baseAmount  = Math.round(baseRate * qty * 100) / 100;         // raw (bina fee)
+      const finalAmount = Math.round(wonRate * qty * 100) / 100;          // buyer payable (+3%)
+      const feeAmount   = Math.round((finalAmount - baseAmount) * 100) / 100; // platform fee total
       const saved       = blockedAmount != null
         ? Math.round((blockedAmount - finalAmount) * 100) / 100
         : 0;
@@ -310,8 +315,12 @@ exports.getOrderBiddingStatus = async (req, res) => {
         data: {
           ...base,
           phase:        "won",
-          wonRate,
-          finalAmount,
+          wonRate,            // 8.24 — buyer ka per-unit rate (3% included)
+          baseRate,           // 8    — reference (supplier rate)
+          finalAmount,        // buyer total payable (3% included)
+          baseAmount,         // raw total (bina fee)
+          feeAmount,          // platform fee (3%)
+          feePercent:   3,
           saved,
           savedPercent: blockedAmount ? Math.round((saved / blockedAmount) * 100) : 0,
           canCancel:    false,
