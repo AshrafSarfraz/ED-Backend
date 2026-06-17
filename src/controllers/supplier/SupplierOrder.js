@@ -406,57 +406,67 @@ exports.getBidHistory = async (req, res) => {
 //  Route (history wale ke paas):
 //    router.get("/:bulkOrderId/tracking", protectBranch, getSupplierTracking);
 // ═══════════════════════════════════════════════════════
-exports.getSupplierTracking = async (req, res) => {
+exports.getBuyerOrderTracking = async (req, res) => {
   try {
     if (req.branch.accountType !== "Supplier") {
       return res.status(403).json({ success: false, message: "Only suppliers can access this" });
     }
-
+ 
+    const buyerOrder = await BuyerOrder.findById(req.params.buyerOrderId);
+    if (!buyerOrder) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+ 
+    // Bulk order (ye supplier ka hi hona chahiye)
     const bulk = await BulkOrder.findOne({
-      _id:              req.params.bulkOrderId,
+      _id:              buyerOrder.bulkOrderId,
       winnerSupplierId: req.branch._id,
     })
       .populate("platformItemId", "name image unit")
       .populate("countryId", "name");
-
+ 
     if (!bulk) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res.status(403).json({ success: false, message: "Not your order" });
     }
-
-    // Delivery order (agar bana ho — ready ke baad banta hai)
+ 
+    // Delivery order + is buyer ka stop
     const delivery = await DeliveryOrder.findOne({ bulkOrderId: bulk._id });
-
-    // ─── Overall delivery status ───
-    // pending / picked / out_for_delivery / delivered
-    const delStatus = delivery?.status || "preparing"; // delivery nahi bana = abhi pack ho raha
-
-    // ─── Steps (overall journey) ───
+    const stop = delivery?.deliveries?.find(
+      (d) => d.buyerOrderId.toString() === buyerOrder._id.toString()
+    );
+ 
+    // ─── Is buyer ki apni journey ───
+    // status: won/awarded → preparing | packed | ready_for_pickup(dispatched) | delivered
+    const boStatus = buyerOrder.status;
+ 
     const stepDefs = [
-      { key: "preparing", title: "Preparing Order",  sub: "You are packing the order" },
-      { key: "ready",     title: "Ready for Pickup",  sub: "Waiting for delivery pickup" },
-      { key: "picked",    title: "Picked Up",         sub: "Delivery company collected it" },
-      { key: "out",       title: "Out for Delivery",  sub: "On the way to buyers" },
-      { key: "delivered", title: "Delivered",         sub: "All buyers received their orders" },
+      { key: "preparing",  title: "Preparing",       sub: "Supplier is packing this order" },
+      { key: "packed",     title: "Packed",          sub: "This order has been packed" },
+      { key: "dispatched", title: "Dispatched",      sub: "Handed to delivery for pickup" },
+      { key: "transit",    title: "Out for Delivery",sub: "On the way to the buyer" },
+      { key: "delivered",  title: "Delivered",       sub: "Buyer received this order" },
     ];
-
-    // current step index nikalo
+ 
+    // current step nikalo (is buyer ke status se)
     let currentStep = 0;
-    if (bulk.status === "ready" && !delivery)            currentStep = 1;
-    else if (delStatus === "pending")                    currentStep = 1;
-    else if (delStatus === "picked")                     currentStep = 2;
-    else if (delStatus === "out_for_delivery")           currentStep = 3;
-    else if (delStatus === "partially_delivered")        currentStep = 3;
-    else if (delStatus === "delivered")                  currentStep = 4;
-    else if (bulk.status === "awarded")                  currentStep = 0;
-
+    if (boStatus === "delivered")                         currentStep = 4;
+    else if (delivery?.status === "out_for_delivery")     currentStep = 3;
+    else if (delivery?.status === "picked")               currentStep = 3;
+    else if (boStatus === "ready_for_pickup")             currentStep = 2;
+    else if (boStatus === "packed")                       currentStep = 1;
+    else                                                  currentStep = 0; // won/awarded
+ 
+    // stop delivered? to delivered pakka
+    if (stop?.status === "delivered") currentStep = 4;
+ 
     const stepTimes = {
-      preparing: bulk.createdAt || null,
-      ready:     delivery?.readyAt || bulk.readyAt || null,
-      picked:    delivery?.pickedAt || null,
-      out:       null,
-      delivered: delivery?.deliveredAt || null,
+      preparing:  bulk.createdAt || null,
+      packed:     null,
+      dispatched: delivery?.readyAt || bulk.readyAt || null,
+      transit:    delivery?.pickedAt || null,
+      delivered:  stop?.deliveredAt || null,
     };
-
+ 
     const steps = stepDefs.map((s, idx) => ({
       key:   s.key,
       title: s.title,
@@ -464,66 +474,42 @@ exports.getSupplierTracking = async (req, res) => {
       done:  idx <= currentStep,
       time:  stepTimes[s.key] || null,
     }));
-
+ 
     const progressPercent = Math.round((currentStep / (stepDefs.length - 1)) * 100);
-
-    // ─── Per-buyer delivery status ───
-    const buyerStops = (delivery?.deliveries || []).map((d, i) => ({
-      orderLabel:   `Order ${i + 1}`,
-      buyerOrderId: d.buyerOrderId,
-      quantity:     d.quantity,
-      unit:         d.unit || bulk.platformItemId?.unit,
-      status:       d.status,            // pending / delivered / failed
-      deliveredAt:  d.deliveredAt || null,
-    }));
-
-    // Agar delivery nahi bana (abhi pack ho raha) → buyer orders se basic list
-    let fallbackStops = [];
-    if (!delivery) {
-      const buyerOrders = await BuyerOrder.find({ _id: { $in: bulk.buyerOrderIds } });
-      fallbackStops = buyerOrders.map((bo, i) => ({
-        orderLabel:   `Order ${i + 1}`,
-        buyerOrderId: bo._id,
-        quantity:     bo.quantity,
-        unit:         bulk.platformItemId?.unit,
-        status:       "pending",
-        deliveredAt:  null,
-      }));
-    }
-
+ 
+    // late? (sirf is order ke liye relevant — delivery late ya supplier late)
+    const isLate = delivery?.isLate || bulk.isLate || false;
+    const lateBy = delivery?.lateBy || (bulk.isLate ? "supplier" : "none");
+ 
     res.json({
       success: true,
       data: {
-        bulkOrderId:     bulk._id,
-        orderNumber:     `#ORD-${bulk._id.toString().slice(-6).toUpperCase()}`,
-        item:            bulk.platformItemId?.name,
-        image:           bulk.platformItemId?.image,
-        country:         bulk.countryId?.name,
-        unit:            bulk.platformItemId?.unit,
-        totalQuantity:   bulk.totalQuantity,
-        winningPrice:    bulk.winningPrice,
-
-        deliveryStatus:  delStatus,
+        buyerOrderId:   buyerOrder._id,
+        orderNumber:    `#ORD-${buyerOrder._id.toString().slice(-6).toUpperCase()}`,
+        item:           bulk.platformItemId?.name,
+        image:          bulk.platformItemId?.image,
+        country:        bulk.countryId?.name,
+        unit:           bulk.platformItemId?.unit,
+        quantity:       buyerOrder.quantity,
+ 
+        status:         boStatus,
         currentStep,
         progressPercent,
         steps,
-
-        isLate:          delivery?.isLate || bulk.isLate || false,
-        lateBy:          delivery?.lateBy || (bulk.isLate ? "supplier" : "none"),
+ 
+        isLate,
+        lateBy,
         deliverDeadline: delivery?.deliverDeadline || null,
-
-        totalBuyers:     buyerStops.length || fallbackStops.length,
-        deliveredCount:  buyerStops.filter((s) => s.status === "delivered").length,
-        stops:           buyerStops.length ? buyerStops : fallbackStops,
+ 
+        deliveryAddress: buyerOrder.deliveryAddress || null,
+        deliveredAt:     stop?.deliveredAt || null,
       },
     });
   } catch (err) {
-    console.error("getSupplierTracking error:", err);
+    console.error("getBuyerOrderTracking error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-
 
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Handle Return
