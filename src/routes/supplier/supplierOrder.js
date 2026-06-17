@@ -30,11 +30,13 @@ const {
   markAllReady,
   getBidHistory,
   handleReturn,
+  getOrderHistory, 
 } = require("../../controllers/supplier/SupplierOrder");
 const { protectBranch } = require("../../middleware/protectBranch");
 
 router.get("/won",                    protectBranch, getWonOrders);
 router.get("/bid-history",            protectBranch, getBidHistory);
+router.get("/history", protectBranch, getOrderHistory);
 router.put("/:buyerOrderId/pack",     protectBranch, markOrderPacked);
 router.put("/:bulkOrderId/pack-all",  protectBranch, markAllPacked);
 router.put("/:bulkOrderId/ready",     protectBranch, markAllReady);
