@@ -4,7 +4,7 @@ const DeliveryOrder   = require("../../models/riderCompany/orderDelivery");
 const BuyerOrder      = require("../../models/buyer/buyerOrder");
 const BulkOrder       = require("../../models/BulkOrder");
 const Invoice         = require("../../models/invoice");
-const { getDeliverySettings } = require("../../cron/deliverySetting");
+
 
 // ═══════════════════════════════════════════════════════
 //  1) Available Orders — jo ready hain pick ke liye
