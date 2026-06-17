@@ -395,6 +395,136 @@ exports.getBidHistory = async (req, res) => {
   }
 };
 
+
+// ═══════════════════════════════════════════════════════
+//  SUPPLIER — Order Delivery Tracking
+//  GET /api/supplier/orders/:bulkOrderId/tracking
+//
+//  controllers/supplier/SupplierOrder.js me ADD karo (ye function)
+//  (BulkOrder, BuyerOrder, DeliveryOrder pehle se imported hain)
+//
+//  Route (history wale ke paas):
+//    router.get("/:bulkOrderId/tracking", protectBranch, getSupplierTracking);
+// ═══════════════════════════════════════════════════════
+exports.getSupplierTracking = async (req, res) => {
+  try {
+    if (req.branch.accountType !== "Supplier") {
+      return res.status(403).json({ success: false, message: "Only suppliers can access this" });
+    }
+
+    const bulk = await BulkOrder.findOne({
+      _id:              req.params.bulkOrderId,
+      winnerSupplierId: req.branch._id,
+    })
+      .populate("platformItemId", "name image unit")
+      .populate("countryId", "name");
+
+    if (!bulk) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // Delivery order (agar bana ho — ready ke baad banta hai)
+    const delivery = await DeliveryOrder.findOne({ bulkOrderId: bulk._id });
+
+    // ─── Overall delivery status ───
+    // pending / picked / out_for_delivery / delivered
+    const delStatus = delivery?.status || "preparing"; // delivery nahi bana = abhi pack ho raha
+
+    // ─── Steps (overall journey) ───
+    const stepDefs = [
+      { key: "preparing", title: "Preparing Order",  sub: "You are packing the order" },
+      { key: "ready",     title: "Ready for Pickup",  sub: "Waiting for delivery pickup" },
+      { key: "picked",    title: "Picked Up",         sub: "Delivery company collected it" },
+      { key: "out",       title: "Out for Delivery",  sub: "On the way to buyers" },
+      { key: "delivered", title: "Delivered",         sub: "All buyers received their orders" },
+    ];
+
+    // current step index nikalo
+    let currentStep = 0;
+    if (bulk.status === "ready" && !delivery)            currentStep = 1;
+    else if (delStatus === "pending")                    currentStep = 1;
+    else if (delStatus === "picked")                     currentStep = 2;
+    else if (delStatus === "out_for_delivery")           currentStep = 3;
+    else if (delStatus === "partially_delivered")        currentStep = 3;
+    else if (delStatus === "delivered")                  currentStep = 4;
+    else if (bulk.status === "awarded")                  currentStep = 0;
+
+    const stepTimes = {
+      preparing: bulk.createdAt || null,
+      ready:     delivery?.readyAt || bulk.readyAt || null,
+      picked:    delivery?.pickedAt || null,
+      out:       null,
+      delivered: delivery?.deliveredAt || null,
+    };
+
+    const steps = stepDefs.map((s, idx) => ({
+      key:   s.key,
+      title: s.title,
+      sub:   s.sub,
+      done:  idx <= currentStep,
+      time:  stepTimes[s.key] || null,
+    }));
+
+    const progressPercent = Math.round((currentStep / (stepDefs.length - 1)) * 100);
+
+    // ─── Per-buyer delivery status ───
+    const buyerStops = (delivery?.deliveries || []).map((d, i) => ({
+      orderLabel:   `Order ${i + 1}`,
+      buyerOrderId: d.buyerOrderId,
+      quantity:     d.quantity,
+      unit:         d.unit || bulk.platformItemId?.unit,
+      status:       d.status,            // pending / delivered / failed
+      deliveredAt:  d.deliveredAt || null,
+    }));
+
+    // Agar delivery nahi bana (abhi pack ho raha) → buyer orders se basic list
+    let fallbackStops = [];
+    if (!delivery) {
+      const buyerOrders = await BuyerOrder.find({ _id: { $in: bulk.buyerOrderIds } });
+      fallbackStops = buyerOrders.map((bo, i) => ({
+        orderLabel:   `Order ${i + 1}`,
+        buyerOrderId: bo._id,
+        quantity:     bo.quantity,
+        unit:         bulk.platformItemId?.unit,
+        status:       "pending",
+        deliveredAt:  null,
+      }));
+    }
+
+    res.json({
+      success: true,
+      data: {
+        bulkOrderId:     bulk._id,
+        orderNumber:     `#ORD-${bulk._id.toString().slice(-6).toUpperCase()}`,
+        item:            bulk.platformItemId?.name,
+        image:           bulk.platformItemId?.image,
+        country:         bulk.countryId?.name,
+        unit:            bulk.platformItemId?.unit,
+        totalQuantity:   bulk.totalQuantity,
+        winningPrice:    bulk.winningPrice,
+
+        deliveryStatus:  delStatus,
+        currentStep,
+        progressPercent,
+        steps,
+
+        isLate:          delivery?.isLate || bulk.isLate || false,
+        lateBy:          delivery?.lateBy || (bulk.isLate ? "supplier" : "none"),
+        deliverDeadline: delivery?.deliverDeadline || null,
+
+        totalBuyers:     buyerStops.length || fallbackStops.length,
+        deliveredCount:  buyerStops.filter((s) => s.status === "delivered").length,
+        stops:           buyerStops.length ? buyerStops : fallbackStops,
+      },
+    });
+  } catch (err) {
+    console.error("getSupplierTracking error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Handle Return
 //  PUT /api/supplier/orders/:orderId/return
