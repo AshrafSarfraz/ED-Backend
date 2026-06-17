@@ -81,6 +81,8 @@ exports.getWonOrders = async (req, res) => {
           totalQuantity:      bulk.totalQuantity,
           winningPrice:       bulk.winningPrice,
           status:             bulk.status,
+          isLate:             bulk.isLate || false,
+          lateReason:         bulk.lateReason || null,
           defaultPackingDays: supplierBranch?.defaultPackingDays || 2,
           totalOrders:        buyerOrders.length,
           packedCount:        orderList.filter((o) => o.packedStatus).length,
