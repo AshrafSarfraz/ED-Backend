@@ -326,9 +326,9 @@ exports.markAllReady = async (req, res) => {
       unit:              bulkOrder.platformItemId?.unit,
       totalQuantity:     bulkOrder.totalQuantity,
       pickupLocation: {
-        lat:     supplierBranch?.warehouseAddress?.lat     || null,
-        lng:     supplierBranch?.warehouseAddress?.lng     || null,
-        address: supplierBranch?.warehouseAddress?.address || null,
+        lat:     supplierBranch?.address?.lat     || null,
+        lng:     supplierBranch?.address?.lng     || null,
+        address: supplierBranch?.address?.address || null,
       },
       supplierName:      supplierBranch?.managerName || null,
       supplierPhone:     supplierBranch?.phone || null,

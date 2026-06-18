@@ -20,19 +20,12 @@ const branchSchema = new mongoose.Schema(
       city:    { type: String, default: null },
     },
 
-    warehouseAddress: {
-      lat:     { type: Number, default: null },
-      lng:     { type: Number, default: null },
-      address: { type: String, default: null },
-      area:    { type: String, default: null },
-      city:    { type: String, default: null },
-    },
-
     bankDetails: {
       accountName:   { type: String, default: null },
       accountNumber: { type: String, default: null },
       iban:          { type: String, default: null },
       bankName:      { type: String, default: null },
+      swiftCode:     { type: String, default: null },
     },
 
     contractPdf: { type: String, default: null },

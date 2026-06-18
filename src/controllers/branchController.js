@@ -84,11 +84,11 @@ exports.addBranch = async (req, res) => {
 //  PUT /api/branch/profile/complete
 //  Auth: Branch token
 //  BUYER    → address only
-//  SUPPLIER → address + warehouseAddress + bankDetails
+//  SUPPLIER → address  + bankDetails
 // ═══════════════════════════════════════════════════════════
 exports.completeProfile = async (req, res) => {
   try {
-    const { address, bankDetails, warehouseAddress } = req.body;
+    const { address, bankDetails } = req.body;          
     const accountType = req.branch.accountType;
 
     if (!address || !address.address || !address.city) {
@@ -98,17 +98,27 @@ exports.completeProfile = async (req, res) => {
     const updateData = { address, registrationStep: 2 };
 
     if (accountType === "Supplier") {
-      if (!warehouseAddress || !warehouseAddress.address) {
-        return res.status(400).json({ success: false, message: "Warehouse address is required for Supplier" });
+
+      if (
+        !bankDetails?.accountName  ||
+        !bankDetails?.accountNumber ||
+        !bankDetails?.iban         ||
+        !bankDetails?.bankName     ||
+        !bankDetails?.swiftCode
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Bank details (accountName, accountNumber, IBAN, bankName, swiftCode) are required for Supplier",
+        });
       }
-      if (!bankDetails?.accountName || !bankDetails?.accountNumber || !bankDetails?.iban || !bankDetails?.bankName) {
-        return res.status(400).json({ success: false, message: "Bank details are required for Supplier" });
-      }
-      updateData.warehouseAddress = warehouseAddress;
-      updateData.bankDetails      = bankDetails;
+      updateData.bankDetails = bankDetails;
     }
 
-    const branch = await Branch.findByIdAndUpdate(req.branch._id, updateData, { new: true, runValidators: true }).select("-password");
+    const branch = await Branch.findByIdAndUpdate(
+      req.branch._id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select("-password");
 
     res.json({
       success: true,
@@ -123,13 +133,12 @@ exports.completeProfile = async (req, res) => {
 
 exports.updateBranchProfile = async (req, res) => {
   try {
-    const { phone, address, warehouseAddress, bankDetails } = req.body;
+    const { phone, address, bankDetails } = req.body;   
 
     const updateData = {};
-    if (phone)            updateData.phone            = phone;
-    if (address)          updateData.address          = address;
-    if (warehouseAddress) updateData.warehouseAddress = warehouseAddress;
-    if (bankDetails)      updateData.bankDetails      = bankDetails;
+    if (phone)       updateData.phone       = phone;
+    if (address)     updateData.address     = address;
+    if (bankDetails) updateData.bankDetails = bankDetails;
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ success: false, message: "Nothing to update" });
@@ -292,7 +301,6 @@ exports.branchLogin = async (req, res) => {
         branchNo:          branch.branchNo,
         email:             branch.email,
         address:           branch.address,
-        warehouseAddress:  branch.warehouseAddress,
         bankDetails:       branch.bankDetails,
         pdcImage:          branch.pdcImage,
         pdcAmount:         branch.pdcAmount,
