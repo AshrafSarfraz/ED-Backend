@@ -13,7 +13,7 @@ const {
   rejectReceipt,
   adminBuyerSummary,
   supplierPaymentSummary,
-} = require("../controllers/Payment");
+} = require("../controllers/PaymentControllers");
 
 const { protectBranch }  = require("../middleware/protectBranch");
 const { protectAdmin }   = require("../middleware/protectAdmin");
