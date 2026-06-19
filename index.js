@@ -44,7 +44,7 @@ app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
 app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
 
-app.use("/api/buyer/payments",  require("./src/routes/payment"));
+app.use("/api/payments", require("./src/routes/payment"));
 
 
 app.use("/api/delivery/auth",   require("./src/routes/riderCompany/RiderAuth"));
