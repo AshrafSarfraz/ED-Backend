@@ -1,6 +1,6 @@
 // 📁 controllers/PaymentController.js
 const Invoice        = require("../models/invoice");
-const PaymentReceipt = require("../models/PaymentReceipt");
+const PaymentReceipt = require("../models/Payment");
 const Branch         = require("../models/Branch");
 const { uploadToFirebase } = require("../config/uploadToFirebase");
 
