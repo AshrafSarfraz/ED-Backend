@@ -163,3 +163,41 @@ exports.getBulkOrderDetail = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — Supplier Performance
+//  GET /api/admin/supplier-performance
+// ═══════════════════════════════════════════════════════
+exports.getSupplierPerformance = async (req, res) => {
+  try {
+    const bids = await Bid.find()
+      .populate("supplierBranchId", "managerName companyName email")
+      .lean();
+
+    const map = {};
+    bids.forEach(b => {
+      const id = b.supplierBranchId?._id?.toString();
+      if (!id) return;
+      if (!map[id]) {
+        map[id] = {
+          branchId:    id,
+          managerName: b.supplierBranchId?.managerName,
+          companyName: b.supplierBranchId?.companyName,
+          email:       b.supplierBranchId?.email,
+          wins: 0, lost: 0, missed: 0, ignored: 0, total: 0,
+        };
+      }
+      map[id].total++;
+      if (b.status === "won")     map[id].wins++;
+      if (b.status === "lost")    map[id].lost++;
+      if (b.status === "missed")  map[id].missed++;
+      if (b.status === "ignored") map[id].ignored++;
+    });
+
+    const result = Object.values(map).sort((a, b) => b.wins - a.wins);
+    res.json({ success: true, total: result.length, data: result });
+  } catch (err) {
+    console.error("getSupplierPerformance error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
