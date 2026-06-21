@@ -558,3 +558,123 @@ exports.handleReturn = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
+
+// ═══════════════════════════════════════════════════════
+//  SUPPLIER — Payment Summary (Date wise grouped)
+//  GET /api/payments/supplier/summary
+// ═══════════════════════════════════════════════════════
+exports.supplierPaymentSummary = async (req, res) => {
+  try {
+    if (req.branch.accountType !== "Supplier") {
+      return res.status(403).json({ success: false, message: "Only suppliers can access this" });
+    }
+
+    const invoices = await Invoice.find({
+      supplierBranchId: req.branch._id,
+      invoiceType:      "supplier",
+    })
+      .populate("platformItemId", "name image unit")
+      .populate("countryId",      "name")
+      .populate("bulkOrderId",    "totalQuantity winningPrice status")
+      .populate("buyerBranchId",  "managerName companyName")
+      .sort({ createdAt: -1 });
+
+    // ─── Step 1: Bulk order wise group ───
+    const bulkMap = {};
+
+    invoices.forEach((inv) => {
+      const bulkId = inv.bulkOrderId?._id?.toString() || "unknown";
+
+      if (!bulkMap[bulkId]) {
+        bulkMap[bulkId] = {
+          bulkOrderId:   inv.bulkOrderId?._id,
+          orderNumber:   `#ORD-${bulkId.slice(-6).toUpperCase()}`,
+          item:          inv.platformItemId?.name,
+          image:         inv.platformItemId?.image,
+          country:       inv.countryId?.name,
+          unit:          inv.platformItemId?.unit,
+          totalQuantity: inv.bulkOrderId?.totalQuantity,
+          winningPrice:  inv.bulkOrderId?.winningPrice,
+          createdAt:     inv.createdAt,
+          // date key for grouping
+          dateKey:       new Date(inv.createdAt).toISOString().slice(0, 10),
+          buyers:        [],
+          totalEarning:  0,
+          totalReleased: 0,
+          totalPending:  0,
+        };
+      }
+
+      const released = inv.supplierPaymentStatus === "released";
+      const amount   = Math.round(inv.grandTotal * 100) / 100;
+
+      bulkMap[bulkId].buyers.push({
+        buyerName: inv.buyerBranchId?.managerName,
+        quantity:  inv.quantity,
+        amount,
+        released,
+      });
+
+      bulkMap[bulkId].totalEarning += amount;
+      if (released) bulkMap[bulkId].totalReleased += amount;
+      else          bulkMap[bulkId].totalPending  += amount;
+    });
+
+    // ─── Step 2: Date wise group karo ───
+    const dateMap = {};
+
+    Object.values(bulkMap).forEach((bulk) => {
+      const dk = bulk.dateKey;
+      if (!dateMap[dk]) {
+        dateMap[dk] = {
+          date:          dk,
+          dateLabel:     new Date(dk).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+          bulkOrders:    [],
+          dayEarning:    0,
+          dayReleased:   0,
+          dayPending:    0,
+        };
+      }
+
+      const b = {
+        ...bulk,
+        totalEarning:  Math.round(bulk.totalEarning  * 100) / 100,
+        totalReleased: Math.round(bulk.totalReleased * 100) / 100,
+        totalPending:  Math.round(bulk.totalPending  * 100) / 100,
+        buyersCount:   bulk.buyers.length,
+        paidCount:     bulk.buyers.filter((x) => x.released).length,
+        allPaid:       bulk.buyers.every((x) => x.released),
+      };
+
+      dateMap[dk].bulkOrders.push(b);
+      dateMap[dk].dayEarning  += b.totalEarning;
+      dateMap[dk].dayReleased += b.totalReleased;
+      dateMap[dk].dayPending  += b.totalPending;
+    });
+
+    // ─── Step 3: Sort dates latest first ───
+    const result = Object.values(dateMap)
+      .map((d) => ({
+        ...d,
+        dayEarning:  Math.round(d.dayEarning  * 100) / 100,
+        dayReleased: Math.round(d.dayReleased * 100) / 100,
+        dayPending:  Math.round(d.dayPending  * 100) / 100,
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    // ─── Overall summary ───
+    const overall = {
+      totalEarning:  Math.round(result.reduce((s, r) => s + r.dayEarning,  0) * 100) / 100,
+      totalReleased: Math.round(result.reduce((s, r) => s + r.dayReleased, 0) * 100) / 100,
+      totalPending:  Math.round(result.reduce((s, r) => s + r.dayPending,  0) * 100) / 100,
+    };
+
+    res.json({ success: true, overall, total: result.length, data: result });
+  } catch (err) {
+    console.error("supplierPaymentSummary error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};

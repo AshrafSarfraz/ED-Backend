@@ -29,6 +29,7 @@ app.use("/api/admin/auth",      require("./src/routes/admin/auth"));
 app.use("/api/admin/settings",  require("./src/routes/admin/timeSetting"));
 app.use("/api/admin/dashboard", require("./src/routes/admin/dashboard"));
 app.use("/api/admin",           require("./src/routes/admin/biddingSettings.route")); // ← NEW
+app.use("/api/admin/bulk-orders", require("./src/routes/admin/bulkOrder"));
 
 // ─── App routes ───────────────────────────────────────────
 app.use("/api/becomePartner",   require("./src/routes/becomePartner"));
