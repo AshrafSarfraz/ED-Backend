@@ -2,6 +2,7 @@
 const BulkOrder  = require("../../models/BulkOrder");
 const Bid        = require("../../models/Bid");
 const BuyerOrder = require("../../models/buyer/buyerOrder");
+const Invoice    = require("../../models/invoice"); 
 
 // ═══════════════════════════════════════════════════════
 //  ADMIN — Bulk Orders List (Bidding History)
@@ -87,10 +88,9 @@ exports.getBulkOrders = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════
-//  ADMIN — Single Bulk Order Detail
-//  GET /api/admin/bulk-orders/:bulkOrderId
-// ═══════════════════════════════════════════════════════
+
+
+
 exports.getBulkOrderDetail = async (req, res) => {
   try {
     const bulk = await BulkOrder.findById(req.params.bulkOrderId)
@@ -102,7 +102,7 @@ exports.getBulkOrderDetail = async (req, res) => {
       return res.status(404).json({ success: false, message: "Bulk order not found" });
     }
 
-    // Sab bids fetch karo
+    // Bids
     const bids = await Bid.find({ bulkOrderId: bulk._id })
       .populate("supplierBranchId", "managerName companyName email")
       .sort({ pricePerUnit: 1 });
@@ -111,6 +111,24 @@ exports.getBulkOrderDetail = async (req, res) => {
     const buyerOrders = await BuyerOrder.find({ bulkOrderId: bulk._id })
       .populate("buyerBranchId", "managerName companyName")
       .select("quantity status buyerBranchId estimatedAmount");
+
+    // ─── Invoices for each buyer order ───────────────────
+    const invoices = await Invoice.find({
+      bulkOrderId:  bulk._id,
+      invoiceType:  "buyer",
+    }).select("buyerOrderId invoiceNumber grandTotal amountDue paymentStatus");
+
+    // Map invoiceNumber by buyerOrderId for quick lookup
+    const invoiceMap = {};
+    invoices.forEach(inv => {
+      invoiceMap[inv.buyerOrderId.toString()] = {
+        invoiceNumber: inv.invoiceNumber,
+        grandTotal:    inv.grandTotal,
+        amountDue:     inv.amountDue,
+        paymentStatus: inv.paymentStatus,
+      };
+    });
+    // ─────────────────────────────────────────────────────
 
     const bidsData = bids.map((bid, i) => ({
       rank:         bid.status === "won" ? 1 : i + 1,
@@ -147,13 +165,22 @@ exports.getBulkOrderDetail = async (req, res) => {
           phone:       bulk.winnerSupplierId.phone,
         } : null,
         bids:        bidsData,
-        buyerOrders: buyerOrders.map(o => ({
-          buyerName:    o.buyerBranchId?.managerName,
-          companyName:  o.buyerBranchId?.companyName,
-          quantity:     o.quantity,
-          status:       o.status,
-          estAmount:    o.estimatedAmount,
-        })),
+        buyerOrders: buyerOrders.map(o => {
+          const inv = invoiceMap[o._id.toString()];
+          return {
+            buyerOrderId:  o._id,
+            buyerName:     o.buyerBranchId?.managerName,
+            companyName:   o.buyerBranchId?.companyName,
+            quantity:      o.quantity,
+            status:        o.status,
+            estAmount:     o.estimatedAmount,
+            // ─── Invoice fields ───────────────────────────
+            invoiceNumber: inv?.invoiceNumber  || null,
+            grandTotal:    inv?.grandTotal     || null,
+            amountDue:     inv?.amountDue      || null,
+            paymentStatus: inv?.paymentStatus  || null,
+          };
+        }),
         totalBuyers: buyerOrders.length,
         totalBids:   bids.length,
       },
@@ -163,6 +190,10 @@ exports.getBulkOrderDetail = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
+
 
 // ═══════════════════════════════════════════════════════
 //  ADMIN — Supplier Performance

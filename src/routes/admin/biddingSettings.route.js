@@ -9,11 +9,3 @@ router.put("/bidding-settings",  protectAdmin, updateSettings);
 
 module.exports = router;
 
-// ─── Phir apni main app file (app.js / index.js / server.js) me mount karo: ───
-//
-//   const biddingSettingsRoute = require("./routes/admin/biddingSettings");
-//   app.use("/api/admin", biddingSettingsRoute);
-//
-// Endpoints ban jayenge:
-//   GET  /api/admin/bidding-settings
-//   PUT  /api/admin/bidding-settings
