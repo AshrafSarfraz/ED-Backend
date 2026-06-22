@@ -28,7 +28,7 @@ exports.getBuyerSummary = async (req, res) => {
           from: "branches", localField: "_id", foreignField: "_id", as: "branch",
         },
       },
-      { $unwind: { path: "$branch", preserveNullAndEmpty: true } },
+      { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
       {
         $project: {
           branchId:        "$_id",
