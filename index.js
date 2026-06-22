@@ -50,6 +50,7 @@ app.use("/api/delivery/orders",   require("./src/routes/riderCompany/riderDelive
 
 app.use("/api/admin/orders",             require("./src/routes/admin/orders"));
 app.use("/api/admin/supplier-payments",  require("./src/routes/admin/supplierPayments"));
+app.use("/api/admin/buyer-payments", require("./src/routes/admin/adminBuyerPaymentsRoute"));
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
 

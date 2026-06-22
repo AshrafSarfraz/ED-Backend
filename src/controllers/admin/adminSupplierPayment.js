@@ -6,12 +6,7 @@ const Branch      = require("../../models/Branch");
 const DAY_MS      = 24 * 60 * 60 * 1000;
 const PAYMENT_DAYS = 60; // payment deadline
 
-// ═══════════════════════════════════════════════════════
-//  ADMIN — Supplier Payment Days Overview
-//  GET /api/admin/supplier-payments/days
-//  Returns: list of dates that have delivered bulk orders
-//           with total pending amount per day
-// ═══════════════════════════════════════════════════════
+
 exports.getPaymentDays = async (req, res) => {
   try {
     // All supplier invoices — pending or released
