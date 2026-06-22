@@ -48,7 +48,8 @@ app.use("/api/payments", require("./src/routes/payment"));
 app.use("/api/delivery/auth",   require("./src/routes/riderCompany/RiderAuth"));
 app.use("/api/delivery/orders",   require("./src/routes/riderCompany/riderDelivery"));
 
-
+app.use("/api/admin/orders",             require("./src/routes/admin/orders"));
+app.use("/api/admin/supplier-payments",  require("./src/routes/admin/supplierPayments"));
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
 
