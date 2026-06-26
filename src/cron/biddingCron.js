@@ -20,11 +20,8 @@ let winnerJob       = null;
 // ─────────────────────────────────────────────────────────
 //  Qatar time helpers (Qatar = UTC+3, no DST)
 // ─────────────────────────────────────────────────────────
-
-// Qatar ki abhi ki date+time (as a "fake UTC" Date jiska getUTC* = Qatar wall clock)
 const getQatarNowParts = () => {
-  const nowUtcMs = Date.now();
-  const qatar = new Date(nowUtcMs + 3 * 60 * 60 * 1000);
+  const qatar = new Date(Date.now() + 3 * 60 * 60 * 1000);
   return {
     year:  qatar.getUTCFullYear(),
     month: qatar.getUTCMonth(),
@@ -32,11 +29,8 @@ const getQatarNowParts = () => {
   };
 };
 
-// Qatar ke aaj ke din ka koi bhi (hour:min) → asli UTC Date
-// Qatar hour h ka UTC = h - 3 (us hi calendar din pe, Date.UTC overflow khud handle karta hai)
 const buildQatarTimeToday = (hour, min) => {
   const { year, month, day } = getQatarNowParts();
-  // Qatar (year-month-day hour:min) ko UTC ms me: subtract 3h
   const utcMs = Date.UTC(year, month, day, hour, min, 0, 0) - 3 * 60 * 60 * 1000;
   return new Date(utcMs);
 };
@@ -47,10 +41,9 @@ const buildQatarTimeTomorrow = (hour, min) => {
   return new Date(utcMs);
 };
 
-// Aaj ke pending orders filter karne ke liye Qatar din ki UTC range
 const getQatarDayRange = () => {
   const { year, month, day } = getQatarNowParts();
-  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0) - 3 * 60 * 60 * 1000);
+  const start = new Date(Date.UTC(year, month, day,     0, 0, 0, 0) - 3 * 60 * 60 * 1000);
   const end   = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0) - 3 * 60 * 60 * 1000);
   return { start, end };
 };
@@ -61,7 +54,35 @@ const buildStartAt = (settings) =>
 const buildEndAt = (settings) =>
   buildQatarTimeToday(settings.WINNER_HOUR, settings.WINNER_MIN);
 
-// Eligible suppliers jinhone na bid ki na ignore kiya → "missed"
+// ─────────────────────────────────────────────────────────
+//  Invoice number generator — LOCKED (race condition safe)
+//  Buyer aur Supplier dono ko SAME number milta hai
+//  e.g. INV-B-20260626-0011 aur INV-S-20260626-0011
+// ─────────────────────────────────────────────────────────
+//  counter — in-memory, cron ke ek run mein consistent rahega
+let _invoiceCounter = null;
+
+const initInvoiceCounter = async () => {
+  // Sab se bada existing number nikalo
+  const last = await Invoice.findOne().sort({ createdAt: -1 }).select("invoiceNumber");
+  if (last?.invoiceNumber) {
+    // INV-B-20260626-0023 → 23
+    const parts = last.invoiceNumber.split("-");
+    const num   = parseInt(parts[parts.length - 1], 10);
+    _invoiceCounter = isNaN(num) ? 0 : num;
+  } else {
+    _invoiceCounter = 0;
+  }
+};
+
+const nextInvNum = () => {
+  _invoiceCounter += 1;
+  return String(_invoiceCounter).padStart(4, "0");
+};
+
+// ─────────────────────────────────────────────────────────
+//  Missed bids record karo
+// ─────────────────────────────────────────────────────────
 const recordMissedBids = async (bulkOrder) => {
   const eligible = await SupplierItem.find({
     platformItemId: bulkOrder.platformItemId,
@@ -104,7 +125,6 @@ const runBiddingStart = async (settings) => {
   try {
     const { start: dayStart, end: dayEnd } = getQatarDayRange();
 
-    // Aaj ke (Qatar din) pending orders
     const pendingOrders = await BuyerOrder.find({
       status:  "pending",
       bidDate: { $gte: dayStart, $lt: dayEnd },
@@ -143,9 +163,8 @@ const runBiddingStart = async (settings) => {
       groups[key].buyerOrderIds.push(order._id);
     }
 
-    // ─── FIX: sahi aaj ka start/end Qatar time ───
     const biddingStartsAt = buildStartAt(settings);
-    const biddingEndsAt    = buildEndAt(settings);
+    const biddingEndsAt   = buildEndAt(settings);
 
     console.log(`🕒 Start: ${biddingStartsAt.toISOString()} | End: ${biddingEndsAt.toISOString()}`);
 
@@ -168,8 +187,8 @@ const runBiddingStart = async (settings) => {
             $push: { buyerOrderIds: { $each: newOrderIds } },
             bidDate:       biddingStartsAt,
             biddingEndsAt,
-            minPrice: g.minPrice,
-            maxPrice: g.maxPrice,
+            minPrice:      g.minPrice,
+            maxPrice:      g.maxPrice,
           });
           await BuyerOrder.updateMany(
             { _id: { $in: newOrderIds } },
@@ -207,11 +226,14 @@ const runBiddingStart = async (settings) => {
 };
 
 // ═══════════════════════════════════════════════
-// 2) Winner Select  (no retry — aaj ka order aaj hi khatam)
+// 2) Winner Select
 // ═══════════════════════════════════════════════
 const runWinnerSelect = async (settings) => {
   console.log("⏰ Winner Select Cron...");
   try {
+    // ─── Counter initialize karo — ek baar sab buyer orders ke liye ───
+    await initInvoiceCounter();
+
     const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
     if (activeBulkOrders.length === 0) {
       console.log("❌ Koi active bulk order nahi");
@@ -226,7 +248,7 @@ const runWinnerSelect = async (settings) => {
         pricePerUnit: { $ne: null },
       }).sort({ pricePerUnit: 1 });
 
-      // ─── No bid → turant CANCEL (no retry) ───────────────
+      // ─── No bid → CANCEL ───────────────────────────────
       if (!winningBid) {
         await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
 
@@ -277,6 +299,8 @@ const runWinnerSelect = async (settings) => {
         _id: { $in: bulkOrder.buyerOrderIds },
       }).populate("buyerBranchId");
 
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
       for (const bo of buyerOrders) {
         const rawTotal         = bo.quantity * winningBid.pricePerUnit;
         const commissionAmount = Math.round(rawTotal * 0.02 * 100) / 100;
@@ -287,11 +311,12 @@ const runWinnerSelect = async (settings) => {
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30);
 
-        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        // ─── LOCKED invoice number — same for buyer & supplier ───
+        const invNum         = nextInvNum();  // ← atomic increment, no DB call
+        const buyerInvNum    = `INV-B-${dateStr}-${invNum}`;
+        const supplierInvNum = `INV-S-${dateStr}-${invNum}`;
 
-        const buyerCount  = await Invoice.countDocuments();
-        const buyerInvNum = `INV-B-${dateStr}-${String(buyerCount + 1).padStart(4, "0")}`;
-
+        // ─── Buyer invoice ────────────────────────────────
         await Invoice.create({
           buyerOrderId:     bo._id,
           bulkOrderId:      bulkOrder._id,
@@ -316,9 +341,7 @@ const runWinnerSelect = async (settings) => {
           dueDate,
         });
 
-        const supplierCount  = await Invoice.countDocuments();
-        const supplierInvNum = `INV-S-${dateStr}-${String(supplierCount + 1).padStart(4, "0")}`;
-
+        // ─── Supplier invoice — SAME invNum ───────────────
         await Invoice.create({
           buyerOrderId:     bo._id,
           bulkOrderId:      bulkOrder._id,
@@ -409,8 +432,6 @@ module.exports = {
   runBiddingStart,
   runWinnerSelect,
 };
-
-
 
 
 
