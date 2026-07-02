@@ -17,6 +17,9 @@ app.use(cors({
     "http://localhost:5174",
     "http://localhost:5175",
     "http://localhost:5176",
+    "https://admin.eldistributor.com",
+    "https://company.eldistributor.com",
+    "https://branch.eldistributor.com",
     "https://el-distibutor-backend.onrender.com",
     "*", // development ke liye — production me hata dena
   ],
