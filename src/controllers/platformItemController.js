@@ -54,9 +54,9 @@ exports.getSinglePlatformItem = async (req, res) => {
 // POST /api/items — Admin
 exports.addPlatformItem = async (req, res) => {
   try {
-    const { name, categoryId, unit } = req.body;
-    if (!name || !categoryId || !unit)
-      return res.status(400).json({ success: false, message: "name, categoryId, and unit are required" });
+    const { name, categoryId, unitType, unit } = req.body;
+    if (!name || !categoryId || !unitType || !unit)
+      return res.status(400).json({ success: false, message: "name, categoryId, unitType, and unit are required" });
 
     const category = await Category.findById(categoryId);
     if (!category) return res.status(404).json({ success: false, message: "Category not found" });
@@ -70,7 +70,7 @@ exports.addPlatformItem = async (req, res) => {
       );
     }
 
-    const item = await PlatformItem.create({ name, categoryId, unit, image: imageUrl });
+    const item = await PlatformItem.create({ name, categoryId, unitType, unit, image: imageUrl });
     await item.populate("categoryId", "name");
     res.status(201).json({ success: true, data: item });
   } catch (err) {
@@ -82,7 +82,7 @@ exports.addPlatformItem = async (req, res) => {
 // PUT /api/items/:id — Admin
 exports.updatePlatformItem = async (req, res) => {
   try {
-    const { name, categoryId, unit } = req.body;
+    const { name, categoryId, unitType, unit } = req.body;
     const item = await PlatformItem.findById(req.params.id);
     if (!item) return res.status(404).json({ success: false, message: "Item not found" });
 
@@ -98,6 +98,7 @@ exports.updatePlatformItem = async (req, res) => {
     }
     if (name)       item.name       = name;
     if (categoryId) item.categoryId = categoryId;
+    if (unitType)   item.unitType   = unitType;
     if (unit)       item.unit       = unit;
 
     await item.save();
