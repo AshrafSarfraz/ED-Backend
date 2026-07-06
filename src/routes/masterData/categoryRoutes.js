@@ -7,9 +7,9 @@ const {
   updateCategory,
   toggleCategory,
   deleteCategory,
-} = require("../controllers/categoryController");
-const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
-const { protectBranch }           = require("../middleware/protectBranch");
+} = require("../../controllers/masterData/categoryController");
+const { adminOnly, protectAdmin } = require("../../middleware/protectAdmin");
+const { protectBranch }           = require("../../middleware/protectBranch");
 
 // Admin — all records
 router.get("/all", protectAdmin, adminOnly, getAllCategoriesAdmin);

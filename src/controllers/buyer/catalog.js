@@ -1,7 +1,7 @@
 const SupplierItem = require("../../models/supplier/supplierCatalog");
-const PlatformItem = require("../../models/PlatformItem");
-const Category = require("../../models/Category");
-const Country = require("../../models/Country");
+const PlatformItem = require("../../models/masterData/PlatformItem");
+const Category = require("../../models/masterData/Category");
+const Country = require("../../models/masterData/Country");
 
 exports.getCatalogItems = async (req, res) => {
   try {

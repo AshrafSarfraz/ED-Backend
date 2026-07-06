@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { El_Distributor } = require("../config/db");
+const { El_Distributor } = require("../../config/db");
 
 const categorySchema = new mongoose.Schema(
   {

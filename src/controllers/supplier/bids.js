@@ -3,8 +3,8 @@ const Bid          = require("../../models/Bid");
 const BulkOrder    = require("../../models/BulkOrder");
 const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
-const PlatformItem = require("../../models/PlatformItem");
-const Country      = require("../../models/Country");
+const PlatformItem = require("../../models/masterData/PlatformItem");
+const Country      = require("../../models/masterData/Country");
 
 // ─── kitne supplier is item+country pe eligible hain ───
 const countActiveSuppliers = async (platformItemId, countryId) => {

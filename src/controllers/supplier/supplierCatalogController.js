@@ -1,6 +1,6 @@
 const SupplierItem = require("../../models/supplier/supplierCatalog");
-const PlatformItem = require("../../models/PlatformItem");
-const Country = require("../../models/Country");
+const PlatformItem = require("../../models/masterData/PlatformItem");
+const Country = require("../../models/masterData/Country");
 const Branch = require("../../models/Branch");
 
 // ═══════════════════════════════════════════════════════════

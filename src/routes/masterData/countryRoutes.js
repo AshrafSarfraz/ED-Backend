@@ -7,9 +7,9 @@ const {
   updateCountry,
   toggleCountry,
   deleteCountry,
-} = require("../controllers/countryController");
-const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
-const { protectBranch }           = require("../middleware/protectBranch");
+} = require("../../controllers/masterData/countryController");
+const { adminOnly, protectAdmin } = require("../../middleware/protectAdmin");
+const { protectBranch }           = require("../../middleware/protectBranch");
 
 // Admin — all records (active + inactive)
 router.get("/all", protectAdmin, adminOnly, getAllCountriesAdmin);

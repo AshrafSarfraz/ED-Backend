@@ -1,4 +1,4 @@
-const Country = require("../models/Country");
+const Country = require("../../models/masterData/Country");
 
 // GET /api/countries — Branch only (active, protectBranch)
 exports.getCountries = async (req, res) => {

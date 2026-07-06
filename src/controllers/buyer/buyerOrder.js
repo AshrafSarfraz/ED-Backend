@@ -1,7 +1,7 @@
 // 📁 controllers/buyer/buyerOrder.js
 const BuyerOrder   = require("../../models/buyer/buyerOrder");
-const PlatformItem = require("../../models/PlatformItem");
-const Country      = require("../../models/Country");
+const PlatformItem = require("../../models/masterData/PlatformItem");
+const Country      = require("../../models/masterData/Country");
 const Invoice      = require("../../models/invoice");
 const Branch       = require("../../models/Branch");
 const BulkOrder    = require("../../models/BulkOrder");

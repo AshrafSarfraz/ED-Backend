@@ -1,4 +1,4 @@
-const Category = require("../models/Category");
+const Category = require("../../models/masterData/Category");
 
 // GET /api/categories — Branch only (active, protectBranch)
 exports.getCategories = async (req, res) => {

@@ -9,9 +9,9 @@ const {
   updatePlatformItem,
   togglePlatformItem,
   deletePlatformItem,
-} = require("../controllers/platformItemController");
-const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
-const { protectBranch }           = require("../middleware/protectBranch");
+} = require("../../controllers/masterData/platformItemController");
+const { adminOnly, protectAdmin } = require("../../middleware/protectAdmin");
+const { protectBranch }           = require("../../middleware/protectBranch");
 
 const upload = multer({ storage: multer.memoryStorage() });
 

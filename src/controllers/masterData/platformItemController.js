@@ -1,6 +1,6 @@
-const PlatformItem = require("../models/PlatformItem");
-const Category     = require("../models/Category");
-const { uploadToFirebase } = require("../config/uploadToFirebase");
+const PlatformItem = require("../../models/masterData/PlatformItem");
+const Category     = require("../../models/masterData/Category");
+const { uploadToFirebase } = require("../../config/uploadToFirebase");
 
 // GET /api/items — Branch only (active, protectBranch)
 exports.getPlatformItems = async (req, res) => {
@@ -10,8 +10,9 @@ exports.getPlatformItems = async (req, res) => {
     if (categoryId) filter.categoryId = categoryId;
 
     const items = await PlatformItem.find(filter)
-      .select("name image unit categoryId")
+      .select("name image unit unitType categoryId brandId")
       .populate("categoryId", "name")
+      .populate("brandId", "name")
       .sort({ name: 1 });
 
     res.json({ success: true, total: items.length, data: items });
@@ -29,8 +30,9 @@ exports.getAllItemsAdmin = async (req, res) => {
     if (categoryId) filter.categoryId = categoryId;
 
     const items = await PlatformItem.find(filter)
-      .select("name image unit categoryId isActive")
+      .select("name image unit unitType categoryId brandId isActive")
       .populate("categoryId", "name")
+      .populate("brandId", "name")
       .sort({ name: 1 });
 
     res.json({ success: true, total: items.length, data: items });
@@ -43,7 +45,9 @@ exports.getAllItemsAdmin = async (req, res) => {
 // GET /api/items/:id — Branch
 exports.getSinglePlatformItem = async (req, res) => {
   try {
-    const item = await PlatformItem.findById(req.params.id).populate("categoryId", "name");
+    const item = await PlatformItem.findById(req.params.id)
+      .populate("categoryId", "name")
+      .populate("brandId", "name");
     if (!item) return res.status(404).json({ success: false, message: "Item not found" });
     res.json({ success: true, data: item });
   } catch (err) {
@@ -54,7 +58,7 @@ exports.getSinglePlatformItem = async (req, res) => {
 // POST /api/items — Admin
 exports.addPlatformItem = async (req, res) => {
   try {
-    const { name, categoryId, unitType, unit } = req.body;
+    const { name, categoryId, brandId, unitType, unit } = req.body;
     if (!name || !categoryId || !unitType || !unit)
       return res.status(400).json({ success: false, message: "name, categoryId, unitType, and unit are required" });
 
@@ -70,8 +74,16 @@ exports.addPlatformItem = async (req, res) => {
       );
     }
 
-    const item = await PlatformItem.create({ name, categoryId, unitType, unit, image: imageUrl });
+    const item = await PlatformItem.create({
+      name,
+      categoryId,
+      brandId: brandId || null,
+      unitType,
+      unit,
+      image: imageUrl,
+    });
     await item.populate("categoryId", "name");
+    await item.populate("brandId", "name");
     res.status(201).json({ success: true, data: item });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ success: false, message: "Item already exists" });
@@ -82,7 +94,7 @@ exports.addPlatformItem = async (req, res) => {
 // PUT /api/items/:id — Admin
 exports.updatePlatformItem = async (req, res) => {
   try {
-    const { name, categoryId, unitType, unit } = req.body;
+    const { name, categoryId, brandId, unitType, unit } = req.body;
     const item = await PlatformItem.findById(req.params.id);
     if (!item) return res.status(404).json({ success: false, message: "Item not found" });
 
@@ -96,13 +108,16 @@ exports.updatePlatformItem = async (req, res) => {
         `item-images/${category.name.toLowerCase()}`
       );
     }
-    if (name)       item.name       = name;
-    if (categoryId) item.categoryId = categoryId;
-    if (unitType)   item.unitType   = unitType;
-    if (unit)       item.unit       = unit;
+
+    if (name)                item.name       = name;
+    if (categoryId)          item.categoryId = categoryId;
+    if (unitType)            item.unitType   = unitType;
+    if (unit)                item.unit       = unit;
+    if (brandId !== undefined) item.brandId  = brandId || null; // null bhejo to remove ho jaye
 
     await item.save();
     await item.populate("categoryId", "name");
+    await item.populate("brandId", "name");
     res.json({ success: true, data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
