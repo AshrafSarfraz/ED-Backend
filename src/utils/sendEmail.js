@@ -544,7 +544,7 @@ const sendCompanyDocumentEmail = async ({ toEmail, brandName, action, reason }) 
       <p style="color:#000000;font-size:15px;">Dear <strong>${brandName}</strong>,</p>
       <p style="color:#000000;font-size:15px;">Your documents have been verified and approved.</p>
       <p style="color:#000000;font-size:15px;">You can now login and start adding your branches.</p>
-      <a href="https://eldistributor.com/company/login"
+      <a href="https://company.eldistributor.com/"
          style="display:inline-block;background:#F15A21;color:#FFFFFF;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px;font-weight:700;">
         Login Now →
       </a>
@@ -557,7 +557,7 @@ const sendCompanyDocumentEmail = async ({ toEmail, brandName, action, reason }) 
         <p style="margin:0;font-size:14px;color:#FF2526;"><strong>Reason:</strong> ${reason}</p>
       </div>` : ""}
       <p style="color:#000000;font-size:15px;">Please login and re-upload your documents.</p>
-      <a href="https://eldistributor.com/company/login"
+      <a href=https://company.eldistributor.com/"
          style="display:inline-block;background:#F15A21;color:#FFFFFF;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px;font-weight:700;">
         Login & Re-upload →
       </a>
@@ -601,10 +601,7 @@ const sendBranchCredentialsEmail = async ({ toEmail, managerName, companyName, t
         </p>
         <p style="margin:12px 0 0;font-size:13px;color:#FF2526;">Please change your password after first login.</p>
       </div>
-      <a href="https://eldistributor.com/branch/login"
-         style="display:inline-block;background:#F15A21;color:#FFFFFF;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:15px;margin-top:8px;font-weight:700;">
-        Login to Your Branch →
-      </a>
+   
     `),
   });
 };
@@ -618,10 +615,6 @@ const sendBranchApprovalEmail = async ({ toEmail, managerName, companyName }) =>
       <p style="color:#000000;font-size:15px;">Dear <strong>${managerName}</strong>,</p>
       <p style="color:#000000;font-size:15px;">Your branch account under <strong>${companyName}</strong> has been approved by admin.</p>
       <p style="color:#000000;font-size:15px;">You can now login using the credentials sent to you earlier.</p>
-      <a href="https://eldistributor.com/branch/login"
-         style="display:inline-block;background:#F15A21;color:#FFFFFF;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:15px;margin-top:16px;font-weight:700;">
-        Login Now →
-      </a>
     `),
   });
 };
@@ -656,12 +649,8 @@ const sendBranchForgotPasswordEmail = async ({ toEmail, managerName, tempPasswor
         <p style="margin:4px 0;font-size:15px;color:#000000;"><strong>New Temporary Password:</strong>
           <span style="background:#FFFFFF;padding:2px 10px;border-radius:4px;font-family:monospace;font-size:15px;color:#F15A21;">${tempPassword}</span>
         </p>
-        <p style="margin:12px 0 0;font-size:13px;color:#FF2526;">Please change your password after logging in.</p>
+        <p style="margin:12px 0 0;font-size:13px;color:#FF2526;">Please change your password after login in mobile Application</p>
       </div>
-      <a href="https://eldistributor.com/branch/login"
-         style="display:inline-block;background:#F15A21;color:#FFFFFF;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:700;">
-        Login Now →
-      </a>
     `),
   });
 };
