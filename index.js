@@ -48,8 +48,7 @@ app.use("/api/buyer/orders",    require("./src/routes/buyer/buyerOrder"));
 
 app.use("/api/supplier/bids",   require("./src/routes/supplier/bids"));
 app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
-app.use("/api/supplier/orders", require("./src/routes/supplier/supplierOrder"));
-app.use("/api/supplier",        require("./src/routes/supplier/supplierDashboard"));
+app.use("/api/supplier",        require("./src/routes/supplier/SupplierDashboard"));
 app.use("/api/payments", require("./src/routes/payment"));
 app.use("/api/delivery/auth",   require("./src/routes/riderCompany/RiderAuth"));
 app.use("/api/delivery/orders",   require("./src/routes/riderCompany/riderDelivery"));
