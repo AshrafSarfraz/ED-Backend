@@ -4,8 +4,8 @@ const SystemSettings = require("../models/supplier/systemSetting");
 const DEFAULTS = {
   pickupStartHour:     10,  // 10 AM Qatar — rider pickup window start
   pickupEndHour:       12,  // 12 PM Qatar — supplier ready deadline (baad mein = late)
-  deliverDeadlineHour: 20,  // 8 PM Qatar — rider must deliver by
-  graceHour:           21,  // 9 PM Qatar — grace period end
+  deliverDeadlineHour: 20,  // 8 PM Qatar  — rider must deliver by
+  graceHour:           21,  // 9 PM Qatar  — grace period end
 };
 
 const KEY = "delivery_settings";

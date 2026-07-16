@@ -701,6 +701,16 @@ const _qatarTime = (hour, min = 0) => {
   return new Date(Date.UTC(year, month, day, hour, min, 0, 0) - 3 * 60 * 60 * 1000);
 };
 
+// Kisi bhi base Date ke upar N din add karke uss din ka hour:min → UTC Date
+// Sequential logic: agar hour < prevHour → next day, warna same day
+const _qatarTimeSequential = (baseDate, hour, prevHour) => {
+  const base = new Date(baseDate.getTime() + 3 * 60 * 60 * 1000); // base ko Qatar mein convert karo
+  let day = base.getUTCDate();
+  // agar yeh hour pichle se chota hai → next day
+  if (hour < prevHour) day += 1;
+  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), day, hour, 0, 0, 0) - 3 * 60 * 60 * 1000);
+};
+
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Get Won Orders
 //  GET /api/supplier/orders/won
@@ -760,6 +770,11 @@ exports.getWonOrders = async (req, res) => {
           isLate:             bulk.isLate || false,
           lateReason:         bulk.lateReason || null,
           defaultPackingDays: supplierBranch?.defaultPackingDays || 2,
+          packingDeadline:    (() => {
+            const d = new Date(bulk.bidDate);
+            d.setDate(d.getDate() + (supplierBranch?.defaultPackingDays || 2));
+            return d.toISOString();
+          })(),
           totalOrders:        buyerOrders.length,
           packedCount:        orderList.filter((o) => o.packedStatus).length,
           orderList,
@@ -956,15 +971,18 @@ exports.markAllReady = async (req, res) => {
     // ─── Delivery settings DB se fetch karo ──────────
     const deliveryConfig = await getDeliverySettings();
 
-    // ─── Supplier late? (pickupEndHour ke baad ready = late) ───
-    const { hour } = _qatarParts();
-    const supplierLate = hour >= deliveryConfig.pickupEndHour;
+    // ─── Sequential time calculation ─────────────────
+    // Rule: agar agla hour < pichla hour → next day
+    // bidDate = day 0 (bidding end time)
+    const biddingEndHour = new Date(bulkOrder.bidDate).getUTCHours() + 3; // Qatar hour
 
-    // ─── Clock deadlines (aaj ke) ───
-    const pickupStart     = _qatarTime(deliveryConfig.pickupStartHour,     0);
-    const pickupEnd       = _qatarTime(deliveryConfig.pickupEndHour,       0);
-    const deliverDeadline = _qatarTime(deliveryConfig.deliverDeadlineHour, 0);
-    const graceDeadline   = _qatarTime(deliveryConfig.graceHour,           0);
+    const pickupStart     = _qatarTimeSequential(bulkOrder.bidDate,  deliveryConfig.pickupStartHour,     biddingEndHour);
+    const pickupEnd       = _qatarTimeSequential(pickupStart,         deliveryConfig.pickupEndHour,       deliveryConfig.pickupStartHour);
+    const deliverDeadline = _qatarTimeSequential(pickupEnd,           deliveryConfig.deliverDeadlineHour, deliveryConfig.pickupEndHour);
+    const graceDeadline   = _qatarTimeSequential(deliverDeadline,     deliveryConfig.graceHour,           deliveryConfig.deliverDeadlineHour);
+
+    // ─── Supplier late? (pickupEnd ke baad ready = late) ───
+    const supplierLate = now > pickupEnd;
 
     // BuyerOrders → ready_for_pickup
     await BuyerOrder.updateMany(
