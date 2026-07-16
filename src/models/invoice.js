@@ -47,7 +47,7 @@ const invoiceSchema = new mongoose.Schema(
 
     supplierPaymentStatus: {
       type: String,
-      enum: ["pending", "released", "deducted"],
+      enum: ["pending", "released", "deducted", "paid_by_buyer"], // ← yeh add karo
       default: "pending",
     },
     supplierPaidAt:    { type: Date,   default: null },
