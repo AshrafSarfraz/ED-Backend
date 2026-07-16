@@ -1,5 +1,5 @@
 // 📁 src/cron/commissionSettingService.js
-
+const SystemSettings = require("../models/supplier/systemSetting");
 const DEFAULTS = {
   platformCommission:  2,   // % — buyer se lena (invoice pe add hota hai)
   deliveryFee:         1,   // % — buyer se lena (rider share)
