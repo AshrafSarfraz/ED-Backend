@@ -3,6 +3,31 @@ const { getBiddingSettings, updateBiddingSettings } = require("../../cron/settin
 const { scheduleCrons } = require("../../cron/biddingCron");   // ← FIX: pehle "../../" toota tha
 
 // ═══════════════════════════════════════════════════════
+//  PUBLIC (branch apps) — order deadline + bidding end time
+//  GET /api/bidding-schedule
+//  Buyer/Supplier apps ke liye — sirf start/end time, koi sensitive data nahi
+// ═══════════════════════════════════════════════════════
+const pad = (n) => String(n).padStart(2, "0");
+
+exports.getPublicSchedule = async (req, res) => {
+  try {
+    const s = await getBiddingSettings();
+    res.json({
+      success: true,
+      data: {
+        // "Order Deadline" — orders is waqt tak place ho sakte hain, uske baad kal ki bidding mein jaate hain
+        startTime: `${pad(s.BIDDING_START_HOUR)}:${pad(s.BIDDING_START_MIN)}`,
+        // Bidding khatam / winner select hone ka waqt
+        endTime:   `${pad(s.WINNER_HOUR)}:${pad(s.WINNER_MIN)}`,
+      },
+    });
+  } catch (err) {
+    console.error("getPublicSchedule error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
 //  ADMIN — Get current bidding schedule
 //  GET /api/admin/bidding-settings
 // ═══════════════════════════════════════════════════════
