@@ -235,7 +235,10 @@ app.use("/api/admin/supplier-payments",  require("./src/routes/admin/supplierPay
 app.use("/api/admin/buyer-payments", require("./src/routes/admin/adminBuyerPaymentsRoute"));
 
 app.use("/api/returns", require("./src/routes/returnRoutes"));
-
+app.use("/api/admin/rider-earnings", require("./src/routes/admin/riderEarnings.route"));
+app.use("/api/admin", require("./src/routes/admin/platformCommission.route"));
+app.use("/api/admin", require("./src/routes/admin/profiles.route"));
+app.use("/api/bidding-schedule", require("./src/routes/biddingSchedule.route"));
 
 
 
