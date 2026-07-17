@@ -895,7 +895,7 @@ exports.adminResolve = async (req, res) => {
       });
 
       // BuyerOrder wapas delivered
-      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "delivered" });
+      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
       return res.json({ success: true, message: "Return request cancelled" });
     }
