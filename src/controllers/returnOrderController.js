@@ -1031,8 +1031,8 @@ exports.adminResolve = async (req, res) => {
         amountDue:     0,
       });
 
-      // 2. BuyerOrder → delivered (as normal)
-      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "delivered" });
+      // 2. BuyerOrder → returned
+      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
       // 3. Rider debt record
       const riderShare = Math.round(invoice.grandTotal * 0.01 * 100) / 100;
