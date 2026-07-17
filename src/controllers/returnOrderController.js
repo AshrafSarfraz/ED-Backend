@@ -610,6 +610,7 @@ const ReturnOrder    = require("../models/returnOrder/ReturnOrder");
 const ReturnDelivery = require("../models/returnOrder/ReturnDelivery");
 const SupplierDebt   = require("../models/returnOrder/SupplierDebt");
 const RiderDebt      = require("../models/returnOrder/RiderDebt");
+const RiderEarning   = require("../models/riderCompany/riderEarning");
 const BuyerOrder     = require("../models/buyer/buyerOrder");
 const BulkOrder      = require("../models/BulkOrder");
 const Invoice        = require("../models/invoice");
@@ -617,6 +618,136 @@ const Branch         = require("../models/Branch");
 const DeliveryOrder  = require("../models/riderCompany/orderDelivery");
 const { getCommissionSettings } = require("../cron/commissionSettingService");
 const { uploadToFirebase } = require("../config/uploadToFirebase");
+
+// ═══════════════════════════════════════════════════════
+//  SHARED — Resolve a return as "supplier guilty"
+//  Used both when supplier self-accepts (auto-resolve, no admin wait)
+//  and when admin manually decides supplier_guilty.
+//
+//  Money flow:
+//    - Buyer: order status → "returned" (payment progress untouched —
+//      buyer still pays on their normal 30-day cycle; we don't force it "paid")
+//    - Supplier: 2% penalty (supplierPenalty setting) cut from their payout
+//    - Rider: already earned 1% for the forward delivery (created at deliverStop).
+//      Now credited ANOTHER 1% for the return-pickup leg — funded by the
+//      2% penalty just cut from the supplier. Order status → "returned" for supplier too.
+// ═══════════════════════════════════════════════════════
+async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note }) {
+  const now = new Date();
+
+  // 1. Supplier invoice → deducted (payment pipeline, NOT forced "paid")
+  const supplierInvoice = await Invoice.findOne({
+    buyerOrderId: returnOrder.buyerOrderId,
+    invoiceType:  "supplier",
+  });
+  if (supplierInvoice) {
+    await Invoice.findByIdAndUpdate(supplierInvoice._id, {
+      supplierPaymentStatus: "deducted",
+      amountDue:             0,
+    });
+  }
+
+  // 2. BuyerOrder status
+  await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
+
+  // 3. Penalty (2%) — cut from supplier's payouts
+  const penaltyAmount    = returnOrder.penaltyAmount;
+  let   remainingPenalty = penaltyAmount;
+  const penaltyCutFrom   = [];
+  let   supplierDebtAdded = 0;
+
+  const sameBulkInvoices = await Invoice.find({
+    bulkOrderId:           returnOrder.bulkOrderId,
+    invoiceType:           "supplier",
+    supplierPaymentStatus: "pending",
+    _id:                   { $ne: supplierInvoice?._id },
+  }).sort({ createdAt: 1 });
+
+  for (const inv of sameBulkInvoices) {
+    if (remainingPenalty <= 0) break;
+    const cut = Math.min(remainingPenalty, inv.amountDue);
+    await Invoice.findByIdAndUpdate(inv._id, { $inc: { amountDue: -cut, supplierDeduction: cut } });
+    penaltyCutFrom.push({ bulkOrderId: returnOrder.bulkOrderId, amountCut: cut });
+    remainingPenalty -= cut;
+  }
+
+  if (remainingPenalty > 0) {
+    const nextBulkInvoices = await Invoice.find({
+      supplierBranchId:      returnOrder.supplierBranchId,
+      invoiceType:           "supplier",
+      supplierPaymentStatus: "pending",
+      bulkOrderId:           { $ne: returnOrder.bulkOrderId },
+    }).sort({ createdAt: 1 });
+
+    for (const inv of nextBulkInvoices) {
+      if (remainingPenalty <= 0) break;
+      const cut = Math.min(remainingPenalty, inv.amountDue);
+      await Invoice.findByIdAndUpdate(inv._id, { $inc: { amountDue: -cut, supplierDeduction: cut } });
+      penaltyCutFrom.push({ bulkOrderId: inv.bulkOrderId, amountCut: cut });
+      remainingPenalty -= cut;
+    }
+  }
+
+  if (remainingPenalty > 0) {
+    await SupplierDebt.create({
+      supplierBranchId: returnOrder.supplierBranchId,
+      returnOrderId:    returnOrder._id,
+      bulkOrderId:       returnOrder.bulkOrderId,
+      amount:            remainingPenalty,
+    });
+    supplierDebtAdded = remainingPenalty;
+  }
+
+  // 4. Reverse delivery (buyer → supplier)
+  const buyerBranch    = await Branch.findById(returnOrder.buyerBranchId);
+  const supplierBranch = await Branch.findById(returnOrder.supplierBranchId);
+
+  const returnDelivery = await ReturnDelivery.create({
+    returnOrderId:     returnOrder._id,
+    deliveryCompanyId: returnOrder.deliveryCompanyId,
+    buyerBranchId:     returnOrder.buyerBranchId,
+    supplierBranchId:  returnOrder.supplierBranchId,
+    pickupAddress: {
+      lat: buyerBranch?.address?.lat, lng: buyerBranch?.address?.lng, address: buyerBranch?.address?.address,
+    },
+    dropAddress: {
+      lat: supplierBranch?.address?.lat, lng: supplierBranch?.address?.lng, address: supplierBranch?.address?.address,
+    },
+  });
+
+  // 5. Rider earning — extra 1% for the return-pickup leg (funded by the 2% penalty above).
+  //    The normal 1% forward-leg earning already exists from deliverStop.
+  if (returnOrder.deliveryCompanyId && invoice?.deliveryAmount > 0) {
+    try {
+      await RiderEarning.create({
+        deliveryCompanyId: returnOrder.deliveryCompanyId,
+        invoiceId:         invoice._id,
+        invoiceNumber:     invoice.invoiceNumber,
+        bulkOrderId:       returnOrder.bulkOrderId,
+        buyerOrderId:      returnOrder.buyerOrderId,
+        grandTotal:        invoice.grandTotal,
+        reason:            "return_leg",
+        earningPct:        1,
+        earningAmount:     invoice.deliveryAmount,
+      });
+    } catch (earnErr) {
+      if (earnErr.code !== 11000) console.error("RiderEarning (return_leg) create error:", earnErr);
+    }
+  }
+
+  // 6. ReturnOrder update
+  await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+    status:            "resolved_supplier_guilty",
+    adminNote:         note || null,
+    adminResolvedAt:   now,
+    resolvedBy:        resolvedBy || null,
+    penaltyApplied:    true,
+    penaltyCutFrom,
+    supplierDebtAdded,
+  });
+
+  return { penaltyAmount, penaltyCutFrom, supplierDebtAdded, returnDeliveryId: returnDelivery._id };
+}
 
 // ═══════════════════════════════════════════════════════
 //  BUYER — Submit Return Request
@@ -801,21 +932,36 @@ exports.supplierRespond = async (req, res) => {
       _id:              req.params.returnId,
       supplierBranchId: req.branch._id,
       status:           "pending",
-    });
+    }).populate("invoiceId");
 
     if (!returnOrder) {
       return res.status(404).json({ success: false, message: "Return request not found" });
     }
 
+    if (action === "reject") {
+      await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+        status:              "supplier_rejected",
+        supplierNote:        note || null,
+        supplierRespondedAt: new Date(),
+      });
+      return res.json({ success: true, message: "Return rejected — sent to admin for review." });
+    }
+
+    // ─── Accept = supplier admits fault → auto-resolve immediately, no admin wait ───
     await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
-      status:              action === "accept" ? "supplier_accepted" : "supplier_rejected",
       supplierNote:        note || null,
       supplierRespondedAt: new Date(),
     });
 
+    const result = await resolveSupplierGuilty(returnOrder, returnOrder.invoiceId, {
+      resolvedBy: null, // supplier self-resolved, not an admin
+      note:       note || "Supplier accepted fault (self-resolved)",
+    });
+
     res.json({
       success: true,
-      message: action === "accept" ? "Return accepted" : "Return rejected",
+      message: `Return accepted. Penalty QAR ${result.penaltyAmount} applied automatically.`,
+      data: result,
     });
   } catch (err) {
     console.error("supplierRespond error:", err);
@@ -886,6 +1032,8 @@ exports.adminResolve = async (req, res) => {
     const now     = new Date();
 
     // ─── CANCEL ─────────────────────────────────────────
+    // Return request cancelled/dismissed — order stays exactly as it was (delivered).
+    // No money movement, no status change to "returned".
     if (decision === "cancel") {
       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
         status:         "resolved_cancelled",
@@ -894,149 +1042,41 @@ exports.adminResolve = async (req, res) => {
         resolvedBy:     req.admin._id,
       });
 
-      // BuyerOrder wapas delivered
-      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
+      // BuyerOrder wapas "delivered" — return cancel hui, koi return hua hi nahi
+      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "delivered" });
 
       return res.json({ success: true, message: "Return request cancelled" });
     }
 
     // ─── SUPPLIER GUILTY ─────────────────────────────────
     if (decision === "supplier_guilty") {
-      // 1. Buyer invoice cancel
-      await Invoice.findByIdAndUpdate(invoice._id, {
-        paymentStatus: "cancelled",
-        amountDue:     0,
-      });
-
-      // 2. Supplier invoice cancel
-      const supplierInvoice = await Invoice.findOne({
-        buyerOrderId: returnOrder.buyerOrderId,
-        invoiceType:  "supplier",
-      });
-      if (supplierInvoice) {
-        await Invoice.findByIdAndUpdate(supplierInvoice._id, {
-          supplierPaymentStatus: "deducted",
-          amountDue:             0,
-        });
-      }
-
-      // 3. BuyerOrder status
-      await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
-
-      // 4. Penalty 2% calculate
-      const penaltyAmount = returnOrder.penaltyAmount;
-      let   remainingPenalty = penaltyAmount;
-      const penaltyCutFrom   = [];
-      let   supplierDebtAdded = 0;
-
-      // Step 1: Same bulk order se cut karo (unpaid supplier invoices)
-      const sameBulkInvoices = await Invoice.find({
-        bulkOrderId:           returnOrder.bulkOrderId,
-        invoiceType:           "supplier",
-        supplierPaymentStatus: "pending",
-        _id:                   { $ne: supplierInvoice?._id },
-      }).sort({ createdAt: 1 });
-
-      for (const inv of sameBulkInvoices) {
-        if (remainingPenalty <= 0) break;
-        const cut = Math.min(remainingPenalty, inv.amountDue);
-        await Invoice.findByIdAndUpdate(inv._id, {
-          $inc: { amountDue: -cut, supplierDeduction: cut },
-        });
-        penaltyCutFrom.push({ bulkOrderId: returnOrder.bulkOrderId, amountCut: cut });
-        remainingPenalty -= cut;
-      }
-
-      // Step 2: Next pending bulk orders se cut karo
-      if (remainingPenalty > 0) {
-        const nextBulkInvoices = await Invoice.find({
-          supplierBranchId:      returnOrder.supplierBranchId,
-          invoiceType:           "supplier",
-          supplierPaymentStatus: "pending",
-          bulkOrderId:           { $ne: returnOrder.bulkOrderId },
-        }).sort({ createdAt: 1 });
-
-        for (const inv of nextBulkInvoices) {
-          if (remainingPenalty <= 0) break;
-          const cut = Math.min(remainingPenalty, inv.amountDue);
-          await Invoice.findByIdAndUpdate(inv._id, {
-            $inc: { amountDue: -cut, supplierDeduction: cut },
-          });
-          penaltyCutFrom.push({ bulkOrderId: inv.bulkOrderId, amountCut: cut });
-          remainingPenalty -= cut;
-        }
-      }
-
-      // Step 3: Remaining → SupplierDebt (negative balance)
-      if (remainingPenalty > 0) {
-        await SupplierDebt.create({
-          supplierBranchId: returnOrder.supplierBranchId,
-          returnOrderId:    returnOrder._id,
-          bulkOrderId:      returnOrder.bulkOrderId,
-          amount:           remainingPenalty,
-        });
-        supplierDebtAdded = remainingPenalty;
-      }
-
-      // 5. Return Delivery create (buyer → supplier)
-      const buyerBranch    = await Branch.findById(returnOrder.buyerBranchId);
-      const supplierBranch = await Branch.findById(returnOrder.supplierBranchId);
-
-      const returnDelivery = await ReturnDelivery.create({
-        returnOrderId:     returnOrder._id,
-        deliveryCompanyId: returnOrder.deliveryCompanyId,
-        buyerBranchId:     returnOrder.buyerBranchId,
-        supplierBranchId:  returnOrder.supplierBranchId,
-        pickupAddress: {
-          lat:     buyerBranch?.address?.lat,
-          lng:     buyerBranch?.address?.lng,
-          address: buyerBranch?.address?.address,
-        },
-        dropAddress: {
-          lat:     supplierBranch?.address?.lat,
-          lng:     supplierBranch?.address?.lng,
-          address: supplierBranch?.address?.address,
-        },
-      });
-
-      // 6. ReturnOrder update
-      await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
-        status:            "resolved_supplier_guilty",
-        adminNote:         note || null,
-        adminResolvedAt:   now,
-        resolvedBy:        req.admin._id,
-        penaltyApplied:    true,
-        penaltyCutFrom,
-        supplierDebtAdded,
+      const result = await resolveSupplierGuilty(returnOrder, invoice, {
+        resolvedBy: req.admin._id,
+        note:       note || null,
       });
 
       return res.json({
         success: true,
-        message: `Supplier guilty. Penalty QAR ${penaltyAmount} applied. Return delivery created.`,
-        data: {
-          penaltyAmount,
-          penaltyCutFrom,
-          supplierDebtAdded,
-          returnDeliveryId: returnDelivery._id,
-        },
+        message: `Supplier guilty. Penalty QAR ${result.penaltyAmount} applied. Return delivery created.`,
+        data: result,
       });
     }
 
     // ─── RIDER GUILTY ────────────────────────────────────
+    // Buyer: no forced payment-status mutation — buyer still pays (or is chased) on
+    //        their normal cycle; only the order status becomes "returned".
+    // Supplier: untouched — their delivery was correct, payment releases normally.
+    // Rider: full order amount (grandTotal) becomes a RiderDebt — this money will
+    //        never be recovered from buyer/supplier, so it comes out of the rider's
+    //        pocket. The rider ALSO keeps the 1% "delivery" earning already credited
+    //        at deliverStop (the forward leg genuinely happened) — earning and debt
+    //        are tracked separately and only netted at monthly settlement time.
     if (decision === "rider_guilty") {
-      // 1. Buyer invoice → paid_by_rider
-      await Invoice.findByIdAndUpdate(invoice._id, {
-        paymentStatus: "paid_by_rider",
-        amountPaid:    invoice.grandTotal,
-        amountDue:     0,
-      });
-
-      // 2. BuyerOrder → returned
+      // 1. BuyerOrder → returned (payment status untouched)
       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
-      // 3. Rider debt record
-      const riderShare = Math.round(invoice.grandTotal * 0.01 * 100) / 100;
-      const netOwed    = Math.round((invoice.grandTotal - riderShare) * 100) / 100;
+      // 2. Rider debt — full grandTotal, no 1% deduction here (netting happens at settlement)
+      const debtAmount = Math.round((invoice.grandTotal || 0) * 100) / 100;
 
       await RiderDebt.create({
         deliveryCompanyId: returnOrder.deliveryCompanyId,
@@ -1044,24 +1084,24 @@ exports.adminResolve = async (req, res) => {
         invoiceId:         invoice._id,
         invoiceNumber:     invoice.invoiceNumber,
         grandTotal:        invoice.grandTotal,
-        riderShare,
-        netOwed,
+        riderShare:        0,          // not used in new model — kept for backward compat
+        netOwed:           debtAmount, // full amount owed by rider
       });
 
-      // 4. ReturnOrder update
+      // 3. ReturnOrder update
       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
         status:            "resolved_rider_guilty",
         adminNote:         note || null,
         adminResolvedAt:   now,
         resolvedBy:        req.admin._id,
         riderDebtRecorded: true,
-        riderDebtAmount:   netOwed,
+        riderDebtAmount:   debtAmount,
       });
 
       return res.json({
         success: true,
-        message: `Rider guilty. Debt QAR ${netOwed} recorded for monthly settlement.`,
-        data: { grandTotal: invoice.grandTotal, riderShare, netOwed },
+        message: `Rider guilty. Debt QAR ${debtAmount} recorded — will be offset against monthly rider earnings.`,
+        data: { grandTotal: invoice.grandTotal, debtAmount },
       });
     }
   } catch (err) {

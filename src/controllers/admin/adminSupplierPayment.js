@@ -357,12 +357,17 @@ exports.getPaymentDays = async (req, res) => {
 
       const d = dayMap[dateKey];
       d.bulkOrderCount.add(inv.bulkOrderId?._id?.toString());
-      d.totalAmount   += inv.grandTotal || 0;
+      d.totalAmount += inv.grandTotal || 0; // gross, for reporting
 
       if (inv.supplierPaymentStatus === "released") {
-        d.totalReleased += inv.grandTotal || 0;
+        d.totalReleased += (inv.amountPaid != null ? inv.amountPaid : inv.grandTotal) || 0;
+      } else if (inv.supplierPaymentStatus === "deducted") {
+        // Fully returned & penalized (supplier_guilty) — supplier owes nothing on this
+        // invoice anymore, don't count it as pending.
       } else {
-        d.totalPending  += inv.grandTotal || 0;
+        // pending — net of any partial penalty deduction already cut from it
+        const net = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
+        d.totalPending += net;
       }
     });
 
@@ -478,10 +483,13 @@ exports.getDayBulkOrders = async (req, res) => {
       });
 
       // Returned order → amount 0, sirf penalty count karo
+      // Non-returned, pending → NET amount (grandTotal minus any penalty deduction already
+      // cut from this invoice) is what's actually still owed — this is what "Pay" will pay out.
       if (!isReturned) {
-        b.totalAmount += inv.grandTotal || 0;
-        if (released) b.totalReleased += inv.grandTotal || 0;
-        else          b.totalPending  += inv.grandTotal || 0;
+        const netAmount = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
+        b.totalAmount += inv.grandTotal || 0; // gross collected from buyers (reporting figure)
+        if (released) b.totalReleased += (inv.amountPaid != null ? inv.amountPaid : netAmount) || 0;
+        else          b.totalPending  += netAmount;
       }
       b.totalDeduction += inv.supplierDeduction || 0;
     });
@@ -492,7 +500,7 @@ exports.getDayBulkOrders = async (req, res) => {
       totalPending:      Math.round(b.totalPending     * 100) / 100,
       totalReleased:     Math.round(b.totalReleased    * 100) / 100,
       totalDeduction:    Math.round(b.totalDeduction   * 100) / 100,
-      netToPaySupplier:  Math.round((b.totalAmount - b.totalDeduction) * 100) / 100,
+      netToPaySupplier:  Math.round(b.totalPending      * 100) / 100, // alias — same net figure, kept for old callers
       fullyPaid:         Math.round(b.totalPending     * 100) / 100 === 0,
       buyerCount:        b.buyerOrders.length,
     }));
@@ -561,13 +569,17 @@ exports.paySupplier = async (req, res) => {
     let totalPaid = 0;
 
     await Promise.all(invoices.map(async inv => {
+      // Some invoices in this batch may have a partial return-penalty deduction
+      // already cut from them (supplierDeduction) while still being "pending" —
+      // pay out the NET amount, not the gross grandTotal.
+      const netAmount = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
       await Invoice.findByIdAndUpdate(inv._id, {
         supplierPaymentStatus: "released",
         supplierPaidAt:        now,
         amountDue:             0,
-        amountPaid:            inv.grandTotal,
+        amountPaid:            netAmount,
       });
-      totalPaid += inv.grandTotal;
+      totalPaid += netAmount;
     }));
 
     res.json({
@@ -598,11 +610,17 @@ exports.getSupplierPaymentRecords = async (req, res) => {
       {
         $group: {
           _id:           "$supplierBranchId",
-          totalEarned:   { $sum: "$grandTotal" },
-          totalReleased: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
-          totalPending:  { $sum: { $cond: [{ $ne: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
-          invoiceCount:  { $sum: 1 },
-          pendingCount:  { $sum: { $cond: [{ $ne: ["$supplierPaymentStatus", "released"] }, 1, 0] } },
+          // "deducted" (fully returned, supplier_guilty) doesn't count as earned/pending
+          totalEarned:   { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, 0, "$grandTotal"] } },
+          totalReleased: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "released"] }, { $ifNull: ["$amountPaid", "$grandTotal"] }, 0] } },
+          totalPending:  { $sum: { $cond: [
+            { $in: ["$supplierPaymentStatus", ["released", "deducted"]] },
+            0,
+            { $subtract: ["$grandTotal", { $ifNull: ["$supplierDeduction", 0] }] },
+          ] } },
+          totalDeducted: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, "$grandTotal", 0] } },
+          invoiceCount:  { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, 0, 1] } },
+          pendingCount:  { $sum: { $cond: [{ $in: ["$supplierPaymentStatus", ["released", "deducted"]] }, 0, 1] } },
           lastActivity:  { $max: "$createdAt" },
         },
       },
@@ -614,7 +632,7 @@ exports.getSupplierPaymentRecords = async (req, res) => {
           as:           "branch",
         },
       },
-      { $unwind: { path: "$branch", preserveNullAndEmpty: true } },
+      { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
       {
         $project: {
           branchId:     "$_id",
@@ -626,6 +644,7 @@ exports.getSupplierPaymentRecords = async (req, res) => {
           totalEarned:   { $round: ["$totalEarned",   2] },
           totalReleased: { $round: ["$totalReleased", 2] },
           totalPending:  { $round: ["$totalPending",  2] },
+          totalDeducted: { $round: ["$totalDeducted", 2] },
           invoiceCount: 1,
           pendingCount: 1,
           lastActivity: 1,

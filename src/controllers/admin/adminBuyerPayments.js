@@ -56,6 +56,67 @@ exports.getBuyerSummary = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
+//  GET /api/admin/buyer-payments/delivery-tracking
+//  Reporting-only screen: buyer-wise delivered order count +
+//  the 1% delivery fee already charged per order (monthly summary).
+//  No new charge — purely visibility into what's already in each invoice's deliveryAmount.
+// ═══════════════════════════════════════════════════════
+exports.getBuyerDeliveryTracking = async (req, res) => {
+  try {
+    const summary = await Invoice.aggregate([
+      { $match: { invoiceType: "buyer", deliveryStatus: "delivered" } },
+      {
+        $group: {
+          _id: {
+            buyerBranchId: "$buyerBranchId",
+            month:         { $dateToString: { format: "%Y-%m", date: "$deliveredAt" } },
+          },
+          deliveredCount:   { $sum: 1 },
+          totalDeliveryFee: { $sum: "$deliveryAmount" }, // 1% already charged, per order
+          totalOrderValue:  { $sum: "$grandTotal" },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.buyerBranchId",
+          months: {
+            $push: {
+              month:            "$_id.month",
+              deliveredCount:   "$deliveredCount",
+              totalDeliveryFee: { $round: ["$totalDeliveryFee", 2] },
+              totalOrderValue:  { $round: ["$totalOrderValue",  2] },
+            },
+          },
+          totalDeliveredCount: { $sum: "$deliveredCount" },
+          totalDeliveryFee:    { $sum: "$totalDeliveryFee" },
+        },
+      },
+      {
+        $lookup: { from: "branches", localField: "_id", foreignField: "_id", as: "branch" },
+      },
+      { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          branchId:            "$_id",
+          managerName:         "$branch.managerName",
+          companyName:         "$branch.companyName",
+          email:               "$branch.email",
+          totalDeliveredCount: 1,
+          totalDeliveryFee:    { $round: ["$totalDeliveryFee", 2] },
+          months:              { $sortArray: { input: "$months", sortBy: { month: -1 } } },
+        },
+      },
+      { $sort: { totalDeliveredCount: -1 } },
+    ]);
+
+    res.json({ success: true, total: summary.length, data: summary });
+  } catch (err) {
+    console.error("getBuyerDeliveryTracking error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ═══════════════════════════════════════════════════════
 //  GET /api/admin/buyer-payments/:branchId
 //  Single buyer — all invoices with item details
 // ═══════════════════════════════════════════════════════
