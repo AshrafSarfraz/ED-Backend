@@ -4,6 +4,8 @@ const BuyerOrder  = require("../../models/buyer/buyerOrder");
 const BulkOrder   = require("../../models/BulkOrder");
 const Invoice     = require("../../models/invoice");
 const Partner     = require("../../models/becomePartner");
+const ReturnOrder = require("../../models/returnOrder/ReturnOrder");
+const RiderDebt   = require("../../models/returnOrder/RiderDebt");
 
 // ═══════════════════════════════════════════════════════
 //  ADMIN — Dashboard Stats
@@ -27,6 +29,9 @@ exports.getDashboard = async (req, res) => {
       supplierBranches,
       buyerBranches,
       pendingDocuments,
+      totalReturns,
+      pendingReturns,
+      unsettledRiderDebts,
     ] = await Promise.all([
       Company.countDocuments(),
       Branch.countDocuments(),
@@ -40,6 +45,9 @@ exports.getDashboard = async (req, res) => {
       Branch.countDocuments({ accountType: "Supplier" }),
       Branch.countDocuments({ accountType: "Buyer" }),
       Company.countDocuments({ documentsStatus: "submitted" }),
+      ReturnOrder.countDocuments(),
+      ReturnOrder.countDocuments({ status: { $in: ["pending", "supplier_accepted", "supplier_rejected"] } }),
+      RiderDebt.countDocuments({ settled: false }),
     ]);
 
     // Revenue
@@ -96,6 +104,13 @@ exports.getDashboard = async (req, res) => {
         partners: {
           total:   totalPartners,
           pending: pendingPartners,
+        },
+        returns: {
+          total:   totalReturns,
+          pending: pendingReturns,
+        },
+        riderDebts: {
+          unsettled: unsettledRiderDebts,
         },
         chart: last7Days,
       },
