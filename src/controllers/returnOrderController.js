@@ -611,6 +611,7 @@ const ReturnDelivery = require("../models/returnOrder/ReturnDelivery");
 const SupplierDebt   = require("../models/returnOrder/SupplierDebt");
 const RiderDebt      = require("../models/returnOrder/RiderDebt");
 const RiderEarning   = require("../models/riderCompany/riderEarning");
+const ledger         = require("../services/ledgerService");
 const BuyerOrder     = require("../models/buyer/buyerOrder");
 const BulkOrder      = require("../models/BulkOrder");
 const Invoice        = require("../models/invoice");
@@ -635,7 +636,8 @@ const { uploadToFirebase } = require("../config/uploadToFirebase");
 async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note }) {
   const now = new Date();
 
-  // 1. Supplier invoice → deducted (payment pipeline, NOT forced "paid")
+  // 1. Supplier invoice — mark THIS specific invoice as "deducted" (informational/display only —
+  //    the actual money impact now lives entirely in the ledger, not in Invoice fields).
   const supplierInvoice = await Invoice.findOne({
     buyerOrderId: returnOrder.buyerOrderId,
     invoiceType:  "supplier",
@@ -650,53 +652,16 @@ async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note })
   // 2. BuyerOrder status
   await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
-  // 3. Penalty (2%) — cut from supplier's payouts
-  const penaltyAmount    = returnOrder.penaltyAmount;
-  let   remainingPenalty = penaltyAmount;
-  const penaltyCutFrom   = [];
-  let   supplierDebtAdded = 0;
-
-  const sameBulkInvoices = await Invoice.find({
-    bulkOrderId:           returnOrder.bulkOrderId,
-    invoiceType:           "supplier",
-    supplierPaymentStatus: "pending",
-    _id:                   { $ne: supplierInvoice?._id },
-  }).sort({ createdAt: 1 });
-
-  for (const inv of sameBulkInvoices) {
-    if (remainingPenalty <= 0) break;
-    const cut = Math.min(remainingPenalty, inv.amountDue);
-    await Invoice.findByIdAndUpdate(inv._id, { $inc: { amountDue: -cut, supplierDeduction: cut } });
-    penaltyCutFrom.push({ bulkOrderId: returnOrder.bulkOrderId, amountCut: cut });
-    remainingPenalty -= cut;
-  }
-
-  if (remainingPenalty > 0) {
-    const nextBulkInvoices = await Invoice.find({
-      supplierBranchId:      returnOrder.supplierBranchId,
-      invoiceType:           "supplier",
-      supplierPaymentStatus: "pending",
-      bulkOrderId:           { $ne: returnOrder.bulkOrderId },
-    }).sort({ createdAt: 1 });
-
-    for (const inv of nextBulkInvoices) {
-      if (remainingPenalty <= 0) break;
-      const cut = Math.min(remainingPenalty, inv.amountDue);
-      await Invoice.findByIdAndUpdate(inv._id, { $inc: { amountDue: -cut, supplierDeduction: cut } });
-      penaltyCutFrom.push({ bulkOrderId: inv.bulkOrderId, amountCut: cut });
-      remainingPenalty -= cut;
-    }
-  }
-
-  if (remainingPenalty > 0) {
-    await SupplierDebt.create({
-      supplierBranchId: returnOrder.supplierBranchId,
-      returnOrderId:    returnOrder._id,
-      bulkOrderId:       returnOrder.bulkOrderId,
-      amount:            remainingPenalty,
-    });
-    supplierDebtAdded = remainingPenalty;
-  }
+  // 3. Penalty (2%) — a single ledger debit against the supplier's overall balance.
+  //    No more hunting through "same bulk order" / "next pending bulk order" invoices to
+  //    manually cut amountDue from — the ledger nets this against ALL of the supplier's
+  //    earnings automatically whenever their balance is read. Much simpler, zero drift risk.
+  const penaltyAmount = returnOrder.penaltyAmount;
+  await ledger.debitSupplier(
+    returnOrder.supplierBranchId, penaltyAmount, "return_penalty",
+    { invoiceId: supplierInvoice?._id, bulkOrderId: returnOrder.bulkOrderId, returnOrderId: returnOrder._id },
+    `Return penalty — ${supplierInvoice?.invoiceNumber || returnOrder._id}`
+  );
 
   // 4. Reverse delivery (buyer → supplier)
   const buyerBranch    = await Branch.findById(returnOrder.buyerBranchId);
@@ -716,23 +681,13 @@ async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note })
   });
 
   // 5. Rider earning — extra 1% for the return-pickup leg (funded by the 2% penalty above).
-  //    The normal 1% forward-leg earning already exists from deliverStop.
+  //    The normal 1% forward-leg earning already exists as a ledger entry from deliverStop.
   if (returnOrder.deliveryCompanyId && invoice?.deliveryAmount > 0) {
-    try {
-      await RiderEarning.create({
-        deliveryCompanyId: returnOrder.deliveryCompanyId,
-        invoiceId:         invoice._id,
-        invoiceNumber:     invoice.invoiceNumber,
-        bulkOrderId:       returnOrder.bulkOrderId,
-        buyerOrderId:      returnOrder.buyerOrderId,
-        grandTotal:        invoice.grandTotal,
-        reason:            "return_leg",
-        earningPct:        1,
-        earningAmount:     invoice.deliveryAmount,
-      });
-    } catch (earnErr) {
-      if (earnErr.code !== 11000) console.error("RiderEarning (return_leg) create error:", earnErr);
-    }
+    await ledger.creditRider(
+      returnOrder.deliveryCompanyId, invoice.deliveryAmount, "return_leg_fee",
+      { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, buyerOrderId: returnOrder.buyerOrderId, returnOrderId: returnOrder._id },
+      `Return-leg fee — ${invoice.invoiceNumber}`
+    );
   }
 
   // 6. ReturnOrder update
@@ -742,11 +697,9 @@ async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note })
     adminResolvedAt:   now,
     resolvedBy:        resolvedBy || null,
     penaltyApplied:    true,
-    penaltyCutFrom,
-    supplierDebtAdded,
   });
 
-  return { penaltyAmount, penaltyCutFrom, supplierDebtAdded, returnDeliveryId: returnDelivery._id };
+  return { penaltyAmount, returnDeliveryId: returnDelivery._id };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1065,28 +1018,25 @@ exports.adminResolve = async (req, res) => {
     // ─── RIDER GUILTY ────────────────────────────────────
     // Buyer: no forced payment-status mutation — buyer still pays (or is chased) on
     //        their normal cycle; only the order status becomes "returned".
-    // Supplier: untouched — their delivery was correct, payment releases normally.
-    // Rider: full order amount (grandTotal) becomes a RiderDebt — this money will
-    //        never be recovered from buyer/supplier, so it comes out of the rider's
-    //        pocket. The rider ALSO keeps the 1% "delivery" earning already credited
-    //        at deliverStop (the forward leg genuinely happened) — earning and debt
-    //        are tracked separately and only netted at monthly settlement time.
+    // Supplier: untouched — their delivery was correct, payment releases normally
+    //           (their order_earning ledger credit from invoice-creation time stands).
+    // Rider: full order amount becomes a ledger DEBIT — this money will never be
+    //        recovered from buyer/supplier, so it comes out of the rider's pocket.
+    //        The rider ALSO keeps the 1% "delivery_fee" credit already recorded at
+    //        deliverStop (the forward leg genuinely happened) — earning and debt are
+    //        separate ledger entries, netted automatically whenever balance is read.
     if (decision === "rider_guilty") {
       // 1. BuyerOrder → returned (payment status untouched)
       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
-      // 2. Rider debt — full grandTotal, no 1% deduction here (netting happens at settlement)
+      // 2. Rider debt — single ledger debit, full grandTotal
       const debtAmount = Math.round((invoice.grandTotal || 0) * 100) / 100;
 
-      await RiderDebt.create({
-        deliveryCompanyId: returnOrder.deliveryCompanyId,
-        returnOrderId:     returnOrder._id,
-        invoiceId:         invoice._id,
-        invoiceNumber:     invoice.invoiceNumber,
-        grandTotal:        invoice.grandTotal,
-        riderShare:        0,          // not used in new model — kept for backward compat
-        netOwed:           debtAmount, // full amount owed by rider
-      });
+      await ledger.debitRider(
+        returnOrder.deliveryCompanyId, debtAmount, "rider_guilty_debt",
+        { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, buyerOrderId: returnOrder.buyerOrderId, returnOrderId: returnOrder._id },
+        `Rider guilty debt — ${invoice.invoiceNumber}`
+      );
 
       // 3. ReturnOrder update
       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {

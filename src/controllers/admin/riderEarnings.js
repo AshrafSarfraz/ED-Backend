@@ -1,9 +1,11 @@
 // 📁 controllers/admin/riderEarnings.js
-// Rider ki monthly earnings (1% delivery + 1% return-leg) — RiderDebt (rider_guilty case) se
-// net karke final payable nikalta hai, jaisa supplier-payments karta hai days ke liye.
-const RiderEarning     = require("../../models/riderCompany/riderEarning");
-const RiderDebt        = require("../../models/returnOrder/RiderDebt");
-const DeliveryCompany  = require("../../models/riderCompany/riderCompany");
+// ═══════════════════════════════════════════════════════
+//  Ledger-driven — rider ki monthly earnings/debt/net-payable sab LedgerEntry se
+//  live compute hoti hain (entityType: "rider").
+// ═══════════════════════════════════════════════════════
+const LedgerEntry    = require("../../models/ledger/LedgerEntry");
+const DeliveryCompany = require("../../models/riderCompany/riderCompany");
+const ledger = require("../../services/ledgerService");
 
 const monthKey   = (d) => new Date(d).toISOString().slice(0, 7); // "2026-07"
 const monthLabel = (key) => {
@@ -12,56 +14,38 @@ const monthLabel = (key) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  ADMIN — Rider Earnings, grouped by month, per rider company
+//  ADMIN — Rider earnings grouped by month, per rider company
 //  GET /api/admin/rider-earnings/months
 // ═══════════════════════════════════════════════════════
 exports.getEarningMonths = async (req, res) => {
   try {
-    const [earnings, debts] = await Promise.all([
-      RiderEarning.find({}).populate("deliveryCompanyId", "name email phone").lean(),
-      RiderDebt.find({}).populate("deliveryCompanyId", "name email phone").lean(),
-    ]);
+    const entries = await LedgerEntry.find({ entityType: "rider" }).lean();
+    const companyIds = [...new Set(entries.map(e => e.entityId.toString()))];
+    const companies = await DeliveryCompany.find({ _id: { $in: companyIds } }).select("name email phone").lean();
+    const companyMap = {};
+    companies.forEach(c => { companyMap[c._id.toString()] = c; });
 
-    // Group earnings by month + company
     const map = {}; // key: `${monthKey}_${companyId}`
-
-    earnings.forEach(e => {
-      const cid = e.deliveryCompanyId?._id?.toString() || "unknown";
+    entries.forEach(e => {
+      const cid = e.entityId.toString();
       const mk  = monthKey(e.createdAt);
       const key = `${mk}_${cid}`;
       if (!map[key]) {
         map[key] = {
           month: mk, monthLabel: monthLabel(mk),
-          companyId: cid, company: e.deliveryCompanyId,
-          deliveryEarning: 0, returnLegEarning: 0, totalEarning: 0,
-          debtAmount: 0, netPayable: 0,
-          earningCount: 0, settled: true,
+          companyId: cid, company: companyMap[cid] || null,
+          deliveryEarning: 0, returnLegEarning: 0, debtAmount: 0,
+          totalEarning: 0, netPayable: 0, settled: true,
         };
       }
       const row = map[key];
-      if (e.reason === "delivery")   row.deliveryEarning  += e.earningAmount || 0;
-      if (e.reason === "return_leg") row.returnLegEarning += e.earningAmount || 0;
-      row.totalEarning += e.earningAmount || 0;
-      row.earningCount++;
-      if (!e.settled) row.settled = false;
-    });
+      if (e.category === "delivery_fee")      row.deliveryEarning  += e.amount;
+      if (e.category === "return_leg_fee")    row.returnLegEarning += e.amount;
+      if (e.category === "rider_guilty_debt") row.debtAmount       += e.amount;
 
-    // Overlay debts (rider_guilty) into the same month+company bucket
-    debts.forEach(d => {
-      const cid = d.deliveryCompanyId?._id?.toString() || "unknown";
-      const mk  = monthKey(d.createdAt);
-      const key = `${mk}_${cid}`;
-      if (!map[key]) {
-        map[key] = {
-          month: mk, monthLabel: monthLabel(mk),
-          companyId: cid, company: d.deliveryCompanyId,
-          deliveryEarning: 0, returnLegEarning: 0, totalEarning: 0,
-          debtAmount: 0, netPayable: 0,
-          earningCount: 0, settled: true,
-        };
-      }
-      map[key].debtAmount += d.netOwed || 0;
-      if (!d.settled) map[key].settled = false;
+      if (e.direction === "credit") row.totalEarning += e.amount;
+      row.netPayable += e.direction === "credit" ? e.amount : -e.amount;
+      if (!e.settled) row.settled = false;
     });
 
     const result = Object.values(map)
@@ -71,7 +55,7 @@ exports.getEarningMonths = async (req, res) => {
         returnLegEarning: Math.round(r.returnLegEarning * 100) / 100,
         totalEarning:     Math.round(r.totalEarning     * 100) / 100,
         debtAmount:       Math.round(r.debtAmount        * 100) / 100,
-        netPayable:       Math.round((r.totalEarning - r.debtAmount) * 100) / 100,
+        netPayable:       Math.round(r.netPayable         * 100) / 100,
       }))
       .sort((a, b) => b.month.localeCompare(a.month));
 
@@ -91,7 +75,6 @@ exports.getEarningMonths = async (req, res) => {
 // ═══════════════════════════════════════════════════════
 //  ADMIN — Detail for one rider company + month
 //  GET /api/admin/rider-earnings/:month/:companyId
-//  month format: "2026-07"
 // ═══════════════════════════════════════════════════════
 exports.getEarningDetail = async (req, res) => {
   try {
@@ -99,20 +82,15 @@ exports.getEarningDetail = async (req, res) => {
     const start = new Date(`${month}-01T00:00:00.000Z`);
     const end   = new Date(start); end.setMonth(end.getMonth() + 1);
 
-    const [earnings, debts, company] = await Promise.all([
-      RiderEarning.find({
-        deliveryCompanyId: companyId,
-        createdAt: { $gte: start, $lt: end },
-      }).populate("invoiceId", "invoiceNumber grandTotal").sort({ createdAt: -1 }).lean(),
-      RiderDebt.find({
-        deliveryCompanyId: companyId,
-        createdAt: { $gte: start, $lt: end },
-      }).populate("invoiceId", "invoiceNumber grandTotal").sort({ createdAt: -1 }).lean(),
+    const [entries, company] = await Promise.all([
+      LedgerEntry.find({ entityType: "rider", entityId: companyId, createdAt: { $gte: start, $lt: end } })
+        .populate("invoiceId", "invoiceNumber grandTotal")
+        .sort({ createdAt: -1 }).lean(),
       DeliveryCompany.findById(companyId).select("name email phone"),
     ]);
 
-    const totalEarning = earnings.reduce((s, e) => s + (e.earningAmount || 0), 0);
-    const totalDebt     = debts.reduce((s, d) => s + (d.netOwed || 0), 0);
+    const totalEarning = entries.filter(e => e.direction === "credit").reduce((s, e) => s + e.amount, 0);
+    const totalDebt     = entries.filter(e => e.direction === "debit").reduce((s, e) => s + e.amount, 0);
 
     res.json({
       success: true,
@@ -123,8 +101,17 @@ exports.getEarningDetail = async (req, res) => {
         totalDebt:    Math.round(totalDebt     * 100) / 100,
         netPayable:   Math.round((totalEarning - totalDebt) * 100) / 100,
       },
-      earnings,
-      debts,
+      earnings: entries.filter(e => e.direction === "credit").map(e => ({
+        _id: e._id, createdAt: e.createdAt, settled: e.settled,
+        reason: e.category === "delivery_fee" ? "delivery" : "return_leg",
+        invoiceNumber: e.invoiceId?.invoiceNumber, invoiceId: e.invoiceId,
+        earningAmount: e.amount,
+      })),
+      debts: entries.filter(e => e.direction === "debit").map(e => ({
+        _id: e._id, createdAt: e.createdAt, settled: e.settled,
+        invoiceNumber: e.invoiceId?.invoiceNumber,
+        grandTotal: e.invoiceId?.grandTotal, netOwed: e.amount,
+      })),
     });
   } catch (err) {
     console.error("getEarningDetail error:", err);
@@ -146,27 +133,24 @@ exports.payRiderEarnings = async (req, res) => {
 
     const start = new Date(`${month}-01T00:00:00.000Z`);
     const end   = new Date(start); end.setMonth(end.getMonth() + 1);
-    const now   = new Date();
 
-    const [earningsResult, debtsResult] = await Promise.all([
-      RiderEarning.updateMany(
-        { deliveryCompanyId: companyId, createdAt: { $gte: start, $lt: end }, settled: false },
-        { settled: true, settledAt: now }
-      ),
-      RiderDebt.updateMany(
-        { deliveryCompanyId: companyId, createdAt: { $gte: start, $lt: end }, settled: false },
-        { settled: true, settledAt: now, note: note || "Monthly settlement" }
-      ),
-    ]);
+    const result = await ledger.settleAndPayout({
+      entityType: "rider", entityId: companyId, start, end,
+      transactionRef, note, paidBy: req.admin._id,
+    });
+
+    if (!result) {
+      return res.status(400).json({ success: false, message: "No unsettled entries found for this month" });
+    }
 
     res.json({
       success: true,
       message: `✅ Rider earnings settled for ${monthLabel(month)}.`,
       data: {
-        earningsSettled: earningsResult.modifiedCount,
-        debtsSettled:    debtsResult.modifiedCount,
-        transactionRef:  transactionRef || null,
-        settledAt:       now,
+        entriesSettled: result.entryCount,
+        netAmount:      result.netAmount,
+        transactionRef: transactionRef || null,
+        settledAt:      result.payout.paidAt,
       },
     });
   } catch (err) {

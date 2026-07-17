@@ -5,6 +5,7 @@ const BuyerOrder   = require("../../models/buyer/buyerOrder");
 const Invoice      = require("../../models/invoice");
 const SupplierItem = require("../../models/supplier/supplierCatalog");
 const ReturnOrder  = require("../../models/returnOrder/ReturnOrder");
+const LedgerEntry  = require("../../models/ledger/LedgerEntry");
 
 // ═══════════════════════════════════════════════════════
 //  SUPPLIER — Dashboard Stats
@@ -19,72 +20,38 @@ exports.getSupplierDashboard = async (req, res) => {
     const branchId = req.branch._id;
 
     const [
-      // 1. Active Products — listed + available today
       activeProducts,
-
-      // 2. All Bids — total (won + lost + missed + ignored + pending)
       allBids,
-
-      // 3. Total Orders — jitne bulk orders mein ye supplier winner raha
       totalOrders,
-
-      // 4. Orders to Pack — awarded status (winner hai, abhi packed nahi)
       ordersToPack,
-
-      // 5. Return Requests — pending (supplier ne abhi respond nahi kiya)
       returnRequests,
-
-      // 6. Total Earning — supplier invoices grandTotal sum
-      earningResult,
-
+      earningRows,
     ] = await Promise.all([
-
-      // 1
-      SupplierItem.countDocuments({
-        branchId,
-        isListed:         true,
-        isAvailableToday: true,
-      }),
-
-      // 2
+      SupplierItem.countDocuments({ branchId, isListed: true, isAvailableToday: true }),
       Bid.countDocuments({ supplierBranchId: branchId }),
-
-      // 3
       BulkOrder.countDocuments({ winnerSupplierId: branchId }),
+      BulkOrder.countDocuments({ winnerSupplierId: branchId, status: "awarded" }),
+      ReturnOrder.countDocuments({ supplierBranchId: branchId, status: "pending" }),
 
-      // 4 — awarded matlab supplier ne jeeta, abhi pack/ready karna baki hai
-      BulkOrder.countDocuments({
-        winnerSupplierId: branchId,
-        status:           "awarded",
-      }),
-
-      // 5
-      ReturnOrder.countDocuments({
-        supplierBranchId: branchId,
-        status:           "pending",
-      }),
-
-      // 6
-      Invoice.aggregate([
-        {
-          $match: {
-            supplierBranchId: branchId,
-            invoiceType:      "supplier",
-          },
-        },
+      // Ledger — this supplier's full financial history (source of truth for money)
+      LedgerEntry.aggregate([
+        { $match: { entityType: "supplier", entityId: branchId } },
         {
           $group: {
-            _id:           null,
-            totalEarning:  { $sum: "$grandTotal" },
-            totalReleased: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
-            totalPending:  { $sum: { $cond: [{ $ne: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
+            _id: "$direction",
+            settled:   { $sum: { $cond: ["$settled", "$amount", 0] } },
+            unsettled: { $sum: { $cond: [{ $eq: ["$settled", false] }, "$amount", 0] } },
           },
         },
       ]),
-
     ]);
 
-    const earning = earningResult[0] || { totalEarning: 0, totalReleased: 0, totalPending: 0 };
+    const credit = earningRows.find(r => r._id === "credit") || { settled: 0, unsettled: 0 };
+    const debit  = earningRows.find(r => r._id === "debit")  || { settled: 0, unsettled: 0 };
+
+    const totalEarning  = (credit.settled + credit.unsettled) - (debit.settled + debit.unsettled);
+    const totalReleased = credit.settled - debit.settled;
+    const totalPending   = credit.unsettled - debit.unsettled;
 
     res.json({
       success: true,
@@ -94,9 +61,9 @@ exports.getSupplierDashboard = async (req, res) => {
         totalOrders,                                                 // total won bulk orders
         ordersToPack,                                                // awarded — packing pending
         returnRequests,                                              // pending return requests
-        totalEarning:  Math.round(earning.totalEarning  * 100) / 100,
-        totalReleased: Math.round(earning.totalReleased * 100) / 100,
-        totalPending:  Math.round(earning.totalPending  * 100) / 100,
+        totalEarning:  Math.round(totalEarning  * 100) / 100,
+        totalReleased: Math.round(totalReleased * 100) / 100,
+        totalPending:  Math.round(totalPending  * 100) / 100,
       },
     });
   } catch (err) {

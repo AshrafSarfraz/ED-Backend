@@ -4,7 +4,7 @@ const DeliveryOrder   = require("../../models/riderCompany/orderDelivery");
 const BuyerOrder      = require("../../models/buyer/buyerOrder");
 const BulkOrder       = require("../../models/BulkOrder");
 const Invoice         = require("../../models/invoice");
-const RiderEarning    = require("../../models/riderCompany/riderEarning");
+const ledger          = require("../../services/ledgerService");
 
 
 // ═══════════════════════════════════════════════════════
@@ -153,23 +153,16 @@ exports.deliverStop = async (req, res) => {
     );
 
     // ─── Rider earning — 1% delivery fee (normal forward leg) ───
-    // Har buyer-stop ke liye ek hi baar credit hota hai (unique index invoiceId+reason se guard)
+    // Ledger entry, unique per invoiceId+category — safe if called twice.
     if (invoice && invoice.deliveryAmount > 0) {
       try {
-        await RiderEarning.create({
-          deliveryCompanyId: req.deliveryCompany._id,
-          invoiceId:         invoice._id,
-          invoiceNumber:     invoice.invoiceNumber,
-          bulkOrderId:       order.bulkOrderId,
-          buyerOrderId:      buyerOrderId,
-          grandTotal:        invoice.grandTotal,
-          reason:            "delivery",
-          earningPct:        1,
-          earningAmount:     invoice.deliveryAmount,
-        });
+        await ledger.creditRider(
+          req.deliveryCompany._id, invoice.deliveryAmount, "delivery_fee",
+          { invoiceId: invoice._id, bulkOrderId: order.bulkOrderId, buyerOrderId },
+          `Delivery fee — ${invoice.invoiceNumber}`
+        );
       } catch (earnErr) {
-        // duplicate key (already credited) — safe to ignore, don't fail the delivery action
-        if (earnErr.code !== 11000) console.error("RiderEarning create error:", earnErr);
+        console.error("Ledger entry error (delivery_fee):", earnErr);
       }
     }
 

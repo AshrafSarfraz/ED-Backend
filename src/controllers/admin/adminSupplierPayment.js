@@ -1,395 +1,77 @@
-// // 📁 controllers/admin/adminSupplierPayment.js
-// const Invoice     = require("../../models/invoice");
-// const BulkOrder   = require("../../models/BulkOrder");
-// const Branch      = require("../../models/Branch");
-
-// const DAY_MS      = 24 * 60 * 60 * 1000;
-// const PAYMENT_DAYS = 60; // payment deadline
-
-
-// exports.getPaymentDays = async (req, res) => {
-//   try {
-//     // All supplier invoices — pending or released
-//     const invoices = await Invoice.find({ invoiceType: "supplier" })
-//       .populate("supplierBranchId", "managerName companyName")
-//       .populate("bulkOrderId",      "status totalQuantity winningPrice readyAt")
-//       .populate("platformItemId",   "name unit image")
-//       .populate("countryId",        "name")
-//       .lean();
-
-//     // Group by date (createdAt date of invoice = day bidding was won)
-//     const dayMap = {};
-
-//     invoices.forEach(inv => {
-//       const dateKey = new Date(inv.createdAt).toISOString().slice(0, 10);
-
-//       if (!dayMap[dateKey]) {
-//         dayMap[dateKey] = {
-//           date:           dateKey,
-//           dateLabel:      new Date(dateKey).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-//           deadline:       new Date(new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
-//           daysLeft:       Math.ceil((new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
-//           totalBulkOrders: 0,
-//           totalPending:   0,
-//           totalReleased:  0,
-//           totalAmount:    0,
-//           bulkOrderCount: new Set(),
-//         };
-//       }
-
-//       const d = dayMap[dateKey];
-//       d.bulkOrderCount.add(inv.bulkOrderId?._id?.toString());
-//       d.totalAmount   += inv.grandTotal || 0;
-
-//       if (inv.supplierPaymentStatus === "released") {
-//         d.totalReleased += inv.grandTotal || 0;
-//       } else {
-//         d.totalPending  += inv.grandTotal || 0;
-//       }
-//     });
-
-//     const result = Object.values(dayMap)
-//       .map(d => ({
-//         ...d,
-//         totalBulkOrders: d.bulkOrderCount.size,
-//         totalAmount:    Math.round(d.totalAmount   * 100) / 100,
-//         totalPending:   Math.round(d.totalPending  * 100) / 100,
-//         totalReleased:  Math.round(d.totalReleased * 100) / 100,
-//         isOverdue:      d.daysLeft < 0,
-//         isUrgent:       d.daysLeft >= 0 && d.daysLeft <= 7,
-//         fullyPaid:      Math.round(d.totalPending * 100) / 100 === 0,
-//         bulkOrderCount: undefined, // Set remove karo
-//       }))
-//       .sort((a, b) => b.date.localeCompare(a.date));
-
-//     // Overall summary
-//     const overall = {
-//       totalPending:  Math.round(result.reduce((s, r) => s + r.totalPending,  0) * 100) / 100,
-//       totalReleased: Math.round(result.reduce((s, r) => s + r.totalReleased, 0) * 100) / 100,
-//       totalAmount:   Math.round(result.reduce((s, r) => s + r.totalAmount,   0) * 100) / 100,
-//       overdueDays:   result.filter(r => r.isOverdue && !r.fullyPaid).length,
-//       urgentDays:    result.filter(r => r.isUrgent  && !r.fullyPaid).length,
-//     };
-
-//     res.json({ success: true, overall, total: result.length, data: result });
-//   } catch (err) {
-//     console.error("getPaymentDays error:", err);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
-// // ═══════════════════════════════════════════════════════
-// //  ADMIN — Bulk Orders for a specific date
-// //  GET /api/admin/supplier-payments/days/:date/bulk-orders
-// //  Returns: all bulk orders for that date with supplier breakdown
-// // ═══════════════════════════════════════════════════════
-// exports.getDayBulkOrders = async (req, res) => {
-//   try {
-//     const { date } = req.params; // "2026-06-15"
-
-//     const start = new Date(date); start.setHours(0, 0, 0, 0);
-//     const end   = new Date(date); end.setHours(23, 59, 59, 999);
-
-//     const invoices = await Invoice.find({
-//       invoiceType: "supplier",
-//       createdAt:   { $gte: start, $lte: end },
-//     })
-//       .populate("supplierBranchId", "managerName companyName phone email bankDetails")
-//       .populate("bulkOrderId",      "totalQuantity winningPrice status readyAt")
-//       .populate("platformItemId",   "name unit image")
-//       .populate("countryId",        "name")
-//       .populate("buyerBranchId",    "managerName companyName")
-//       .lean();
-
-//     // Group by bulkOrderId
-//     const bulkMap = {};
-
-//     invoices.forEach(inv => {
-//       const bulkId = inv.bulkOrderId?._id?.toString() || "unknown";
-
-//       if (!bulkMap[bulkId]) {
-//         bulkMap[bulkId] = {
-//           bulkOrderId:    bulkId,
-//           orderRef:       `#ORD-${bulkId.slice(-6).toUpperCase()}`,
-//           item:           inv.platformItemId?.name,
-//           image:          inv.platformItemId?.image,
-//           unit:           inv.platformItemId?.unit,
-//           country:        inv.countryId?.name,
-//           totalQuantity:  inv.bulkOrderId?.totalQuantity,
-//           winningPrice:   inv.bulkOrderId?.winningPrice,
-//           bulkStatus:     inv.bulkOrderId?.status,
-//           readyAt:        inv.bulkOrderId?.readyAt,
-
-//           // supplier info (same for all invoices in this bulk)
-//           supplierName:    inv.supplierBranchId?.managerName,
-//           supplierCompany: inv.supplierBranchId?.companyName,
-//           supplierPhone:   inv.supplierBranchId?.phone,
-//           supplierEmail:   inv.supplierBranchId?.email,
-//           supplierBank:    inv.supplierBranchId?.bankDetails || null,
-//           supplierBranchId: inv.supplierBranchId?._id,
-
-//           buyerOrders: [],
-//           totalAmount:   0,
-//           totalPending:  0,
-//           totalReleased: 0,
-//           fullyPaid:     false,
-//         };
-//       }
-
-//       const b = bulkMap[bulkId];
-//       const released = inv.supplierPaymentStatus === "released";
-
-//       b.buyerOrders.push({
-//         invoiceId:     inv._id,
-//         invoiceNumber: inv.invoiceNumber,
-//         buyerName:     inv.buyerBranchId?.managerName,
-//         buyerCompany:  inv.buyerBranchId?.companyName,
-//         quantity:      inv.quantity,
-//         pricePerUnit:  inv.pricePerUnit,
-//         amount:        Math.round(inv.grandTotal * 100) / 100,
-//         status:        inv.supplierPaymentStatus,
-//         paidAt:        inv.supplierPaidAt || null,
-//       });
-
-//       b.totalAmount   += inv.grandTotal || 0;
-//       if (released) b.totalReleased += inv.grandTotal || 0;
-//       else          b.totalPending  += inv.grandTotal || 0;
-//     });
-
-//     const result = Object.values(bulkMap).map(b => ({
-//       ...b,
-//       totalAmount:   Math.round(b.totalAmount   * 100) / 100,
-//       totalPending:  Math.round(b.totalPending  * 100) / 100,
-//       totalReleased: Math.round(b.totalReleased * 100) / 100,
-//       fullyPaid:     Math.round(b.totalPending  * 100) / 100 === 0,
-//       buyerCount:    b.buyerOrders.length,
-//     }));
-
-//     // Day totals
-//     const dayTotal = {
-//       totalAmount:   Math.round(result.reduce((s, r) => s + r.totalAmount,   0) * 100) / 100,
-//       totalPending:  Math.round(result.reduce((s, r) => s + r.totalPending,  0) * 100) / 100,
-//       totalReleased: Math.round(result.reduce((s, r) => s + r.totalReleased, 0) * 100) / 100,
-//       bulkOrderCount: result.length,
-//       deadline:      new Date(new Date(date).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
-//       daysLeft:      Math.ceil((new Date(date).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
-//     };
-
-//     res.json({ success: true, date, dayTotal, total: result.length, data: result });
-//   } catch (err) {
-//     console.error("getDayBulkOrders error:", err);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
-// // ═══════════════════════════════════════════════════════
-// //  ADMIN — Pay Supplier (single bulk order OR all bulk orders of a day)
-// //  POST /api/admin/supplier-payments/pay
-// //  Body: { bulkOrderId } OR { date }  (ek dono me se)
-// //  + { note, transactionRef }
-// // ═══════════════════════════════════════════════════════
-// exports.paySupplier = async (req, res) => {
-//   try {
-//     const { bulkOrderId, date, note, transactionRef } = req.body;
-
-//     if (!bulkOrderId && !date) {
-//       return res.status(400).json({ success: false, message: "bulkOrderId or date required" });
-//     }
-
-//     let filter = { invoiceType: "supplier", supplierPaymentStatus: "pending" };
-
-//     if (bulkOrderId) {
-//       // Single bulk order ka payment
-//       const bulk = await BulkOrder.findById(bulkOrderId);
-//       if (!bulk) {
-//         return res.status(404).json({ success: false, message: "Bulk order not found" });
-//       }
-//       // Find all supplier invoices for this bulk
-//       const invoiceIds = await Invoice.find({
-//         bulkOrderId,
-//         invoiceType: "supplier",
-//         supplierPaymentStatus: "pending",
-//       }).select("_id");
-
-//       filter = { _id: { $in: invoiceIds.map(i => i._id) } };
-//     } else {
-//       // All bulk orders of a day
-//       const start = new Date(date); start.setHours(0, 0, 0, 0);
-//       const end   = new Date(date); end.setHours(23, 59, 59, 999);
-//       filter.createdAt = { $gte: start, $lte: end };
-//     }
-
-//     const invoices = await Invoice.find(filter);
-
-//     if (invoices.length === 0) {
-//       return res.status(400).json({ success: false, message: "No pending supplier invoices found" });
-//     }
-
-//     const now = new Date();
-//     let totalPaid = 0;
-
-//     await Promise.all(invoices.map(async inv => {
-//       await Invoice.findByIdAndUpdate(inv._id, {
-//         supplierPaymentStatus: "released",
-//         supplierPaidAt:        now,
-//         amountDue:             0,
-//         amountPaid:            inv.grandTotal,
-//       });
-//       totalPaid += inv.grandTotal;
-//     }));
-
-//     res.json({
-//       success: true,
-//       message: `✅ Payment released to ${invoices.length} supplier invoice(s).`,
-//       data: {
-//         invoiceCount:   invoices.length,
-//         totalPaid:      Math.round(totalPaid * 100) / 100,
-//         paidAt:         now,
-//         note:           note || null,
-//         transactionRef: transactionRef || null,
-//       },
-//     });
-//   } catch (err) {
-//     console.error("paySupplier error:", err);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
-// // ═══════════════════════════════════════════════════════
-// //  ADMIN — Supplier Payment Records (per supplier)
-// //  GET /api/admin/supplier-payments/suppliers
-// // ═══════════════════════════════════════════════════════
-// exports.getSupplierPaymentRecords = async (req, res) => {
-//   try {
-//     const summary = await Invoice.aggregate([
-//       { $match: { invoiceType: "supplier" } },
-//       {
-//         $group: {
-//           _id:           "$supplierBranchId",
-//           totalEarned:   { $sum: "$grandTotal" },
-//           totalReleased: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
-//           totalPending:  { $sum: { $cond: [{ $ne: ["$supplierPaymentStatus", "released"] }, "$grandTotal", 0] } },
-//           invoiceCount:  { $sum: 1 },
-//           pendingCount:  { $sum: { $cond: [{ $ne: ["$supplierPaymentStatus", "released"] }, 1, 0] } },
-//           lastActivity:  { $max: "$createdAt" },
-//         },
-//       },
-//       {
-//         $lookup: {
-//           from:         "branches",
-//           localField:   "_id",
-//           foreignField: "_id",
-//           as:           "branch",
-//         },
-//       },
-//       { $unwind: { path: "$branch", preserveNullAndEmpty: true } },
-//       {
-//         $project: {
-//           branchId:     "$_id",
-//           supplierName: "$branch.managerName",
-//           companyName:  "$branch.companyName",
-//           email:        "$branch.email",
-//           phone:        "$branch.phone",
-//           bankDetails:  "$branch.bankDetails",
-//           totalEarned:   { $round: ["$totalEarned",   2] },
-//           totalReleased: { $round: ["$totalReleased", 2] },
-//           totalPending:  { $round: ["$totalPending",  2] },
-//           invoiceCount: 1,
-//           pendingCount: 1,
-//           lastActivity: 1,
-//         },
-//       },
-//       { $sort: { totalPending: -1 } },
-//     ]);
-
-//     res.json({ success: true, total: summary.length, data: summary });
-//   } catch (err) {
-//     console.error("getSupplierPaymentRecords error:", err);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
 // 📁 controllers/admin/adminSupplierPayment.js
-const Invoice     = require("../../models/invoice");
-const BulkOrder   = require("../../models/BulkOrder");
-const Branch      = require("../../models/Branch");
+// ═══════════════════════════════════════════════════════
+//  Ledger-driven — sab money figures (earned/pending/released) LedgerEntry se
+//  live compute hote hain, kisi Invoice field mein manually +/- nahi hota.
+//  Invoice sirf item/quantity/buyer jaisi DISPLAY detail ke liye query hoti hai.
+// ═══════════════════════════════════════════════════════
+const Invoice      = require("../../models/invoice");
+const BulkOrder     = require("../../models/BulkOrder");
+const Branch        = require("../../models/Branch");
+const LedgerEntry    = require("../../models/ledger/LedgerEntry");
 const { getCommissionSettings } = require("../../cron/commissionSettingService");
+const ledger = require("../../services/ledgerService");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Helper — DB se payment days lao (cache nahi — fresh fetch)
-const getPaymentDays = async () => {
+const getPaymentDays_helper = async () => {
   const s = await getCommissionSettings();
   return s.supplierPaymentDays || 60;
 };
 
-
+// ═══════════════════════════════════════════════════════
+//  ADMIN — Payment days overview (grouped by day the entry was recorded)
+//  GET /api/admin/supplier-payments/days
+// ═══════════════════════════════════════════════════════
 exports.getPaymentDays = async (req, res) => {
   try {
-    const PAYMENT_DAYS = await getPaymentDays(); // ← DB se fetch
-    // All supplier invoices — pending or released
-    const invoices = await Invoice.find({ invoiceType: "supplier" })
-      .populate("supplierBranchId", "managerName companyName")
-      .populate("bulkOrderId",      "status totalQuantity winningPrice readyAt")
-      .populate("platformItemId",   "name unit image")
-      .populate("countryId",        "name")
-      .lean();
+    const PAYMENT_DAYS = await getPaymentDays_helper();
 
-    // Group by date (createdAt date of invoice = day bidding was won)
+    const entries = await LedgerEntry.find({ entityType: "supplier" }).lean();
+
     const dayMap = {};
-
-    invoices.forEach(inv => {
-      const dateKey = new Date(inv.createdAt).toISOString().slice(0, 10);
-
+    entries.forEach(e => {
+      const dateKey = new Date(e.createdAt).toISOString().slice(0, 10);
       if (!dayMap[dateKey]) {
         dayMap[dateKey] = {
-          date:           dateKey,
-          dateLabel:      new Date(dateKey).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-          deadline:       new Date(new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
-          daysLeft:       Math.ceil((new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
-          totalBulkOrders: 0,
-          totalPending:   0,
-          totalReleased:  0,
-          totalAmount:    0,
-          bulkOrderCount: new Set(),
+          date: dateKey,
+          dateLabel: new Date(dateKey).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+          deadline: new Date(new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
+          daysLeft: Math.ceil((new Date(dateKey).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
+          totalAmount: 0, totalPending: 0, totalReleased: 0, totalDeducted: 0,
+          bulkOrderIds: new Set(),
         };
       }
-
       const d = dayMap[dateKey];
-      d.bulkOrderCount.add(inv.bulkOrderId?._id?.toString());
-      d.totalAmount += inv.grandTotal || 0; // gross, for reporting
+      if (e.bulkOrderId) d.bulkOrderIds.add(e.bulkOrderId.toString());
 
-      if (inv.supplierPaymentStatus === "released") {
-        d.totalReleased += (inv.amountPaid != null ? inv.amountPaid : inv.grandTotal) || 0;
-      } else if (inv.supplierPaymentStatus === "deducted") {
-        // Fully returned & penalized (supplier_guilty) — supplier owes nothing on this
-        // invoice anymore, don't count it as pending.
-      } else {
-        // pending — net of any partial penalty deduction already cut from it
-        const net = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
-        d.totalPending += net;
-      }
+      const signed = e.direction === "credit" ? e.amount : -e.amount;
+      if (e.category === "return_penalty") d.totalDeducted += e.amount;
+      else d.totalAmount += signed; // order_earning credits (this day's gross earning)
+
+      if (e.settled) d.totalReleased += signed;
+      else           d.totalPending  += signed;
     });
 
     const result = Object.values(dayMap)
       .map(d => ({
         ...d,
-        totalBulkOrders: d.bulkOrderCount.size,
-        totalAmount:    Math.round(d.totalAmount   * 100) / 100,
-        totalPending:   Math.round(d.totalPending  * 100) / 100,
-        totalReleased:  Math.round(d.totalReleased * 100) / 100,
+        totalBulkOrders: d.bulkOrderIds.size,
+        totalAmount:    Math.round(d.totalAmount    * 100) / 100,
+        totalPending:   Math.round(d.totalPending   * 100) / 100,
+        totalReleased:  Math.round(d.totalReleased  * 100) / 100,
+        totalDeducted:  Math.round(d.totalDeducted  * 100) / 100,
         isOverdue:      d.daysLeft < 0,
         isUrgent:       d.daysLeft >= 0 && d.daysLeft <= 7,
         fullyPaid:      Math.round(d.totalPending * 100) / 100 === 0,
-        bulkOrderCount: undefined, // Set remove karo
+        bulkOrderIds:   undefined,
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
 
-    // Overall summary
     const overall = {
       totalPending:  Math.round(result.reduce((s, r) => s + r.totalPending,  0) * 100) / 100,
       totalReleased: Math.round(result.reduce((s, r) => s + r.totalReleased, 0) * 100) / 100,
       totalAmount:   Math.round(result.reduce((s, r) => s + r.totalAmount,   0) * 100) / 100,
+      totalDeducted: Math.round(result.reduce((s, r) => s + r.totalDeducted, 0) * 100) / 100,
       overdueDays:   result.filter(r => r.isOverdue && !r.fullyPaid).length,
       urgentDays:    result.filter(r => r.isUrgent  && !r.fullyPaid).length,
     };
@@ -402,117 +84,109 @@ exports.getPaymentDays = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  ADMIN — Bulk Orders for a specific date
+//  ADMIN — Bulk orders for a specific date (with invoice-level display detail)
 //  GET /api/admin/supplier-payments/days/:date/bulk-orders
-//  Returns: all bulk orders for that date with supplier breakdown
 // ═══════════════════════════════════════════════════════
 exports.getDayBulkOrders = async (req, res) => {
   try {
-    const { date } = req.params; // "2026-06-15"
-    const PAYMENT_DAYS = await getPaymentDays(); // ← DB se fetch
-
+    const { date } = req.params;
+    const PAYMENT_DAYS = await getPaymentDays_helper();
     const start = new Date(date); start.setHours(0, 0, 0, 0);
     const end   = new Date(date); end.setHours(23, 59, 59, 999);
 
-    const invoices = await Invoice.find({
-      invoiceType: "supplier",
-      createdAt:   { $gte: start, $lte: end },
-    })
+    const entries = await LedgerEntry.find({
+      entityType: "supplier",
+      createdAt: { $gte: start, $lte: end },
+    }).lean();
+
+    if (entries.length === 0) {
+      return res.json({ success: true, date, dayTotal: { totalAmount: 0, totalPending: 0, totalReleased: 0, bulkOrderCount: 0, deadline: null, daysLeft: null }, total: 0, data: [] });
+    }
+
+    const invoiceIds = [...new Set(entries.filter(e => e.invoiceId).map(e => e.invoiceId.toString()))];
+    const invoices = await Invoice.find({ _id: { $in: invoiceIds } })
       .populate("supplierBranchId", "managerName companyName phone email bankDetails")
       .populate("bulkOrderId",      "totalQuantity winningPrice status readyAt")
       .populate("platformItemId",   "name unit image")
       .populate("countryId",        "name")
       .populate("buyerBranchId",    "managerName companyName")
-      .populate("buyerOrderId",     "status")
       .lean();
+    const invoiceMap = {};
+    invoices.forEach(inv => { invoiceMap[inv._id.toString()] = inv; });
 
-    // Group by bulkOrderId
+    // Group ledger entries by invoiceId → compute net per invoice
+    const perInvoice = {};
+    entries.forEach(e => {
+      if (!e.invoiceId) return;
+      const id = e.invoiceId.toString();
+      if (!perInvoice[id]) perInvoice[id] = { credit: 0, debit: 0, allSettled: true, hasPenalty: false };
+      if (e.direction === "credit") perInvoice[id].credit += e.amount;
+      else perInvoice[id].debit += e.amount;
+      if (!e.settled) perInvoice[id].allSettled = false;
+      if (e.category === "return_penalty") perInvoice[id].hasPenalty = true;
+    });
+
     const bulkMap = {};
-
-    invoices.forEach(inv => {
+    Object.entries(perInvoice).forEach(([invId, agg]) => {
+      const inv = invoiceMap[invId];
+      if (!inv) return;
       const bulkId = inv.bulkOrderId?._id?.toString() || "unknown";
 
       if (!bulkMap[bulkId]) {
         bulkMap[bulkId] = {
-          bulkOrderId:    bulkId,
-          orderRef:       `#ORD-${bulkId.slice(-6).toUpperCase()}`,
-          item:           inv.platformItemId?.name,
-          image:          inv.platformItemId?.image,
-          unit:           inv.platformItemId?.unit,
-          country:        inv.countryId?.name,
-          totalQuantity:  inv.bulkOrderId?.totalQuantity,
-          winningPrice:   inv.bulkOrderId?.winningPrice,
-          bulkStatus:     inv.bulkOrderId?.status,
-          readyAt:        inv.bulkOrderId?.readyAt,
-
-          // supplier info (same for all invoices in this bulk)
-          supplierName:    inv.supplierBranchId?.managerName,
-          supplierCompany: inv.supplierBranchId?.companyName,
-          supplierPhone:   inv.supplierBranchId?.phone,
-          supplierEmail:   inv.supplierBranchId?.email,
-          supplierBank:    inv.supplierBranchId?.bankDetails || null,
-          supplierBranchId: inv.supplierBranchId?._id,
-
-          buyerOrders: [],
-          totalAmount:     0,
-          totalPending:    0,
-          totalReleased:   0,
-          totalDeduction:  0,
-          fullyPaid:       false,
+          bulkOrderId: bulkId,
+          orderRef: `#ORD-${bulkId.slice(-6).toUpperCase()}`,
+          item: inv.platformItemId?.name, image: inv.platformItemId?.image, unit: inv.platformItemId?.unit,
+          country: inv.countryId?.name,
+          totalQuantity: inv.bulkOrderId?.totalQuantity, winningPrice: inv.bulkOrderId?.winningPrice,
+          bulkStatus: inv.bulkOrderId?.status, readyAt: inv.bulkOrderId?.readyAt,
+          supplierName: inv.supplierBranchId?.managerName, supplierCompany: inv.supplierBranchId?.companyName,
+          supplierPhone: inv.supplierBranchId?.phone, supplierEmail: inv.supplierBranchId?.email,
+          supplierBank: inv.supplierBranchId?.bankDetails || null, supplierBranchId: inv.supplierBranchId?._id,
+          buyerOrders: [], totalAmount: 0, totalPending: 0, totalReleased: 0, totalDeduction: 0,
         };
       }
 
       const b = bulkMap[bulkId];
-      const released   = inv.supplierPaymentStatus === "released";
-      const isReturned = inv.buyerOrderId?.status === "returned";
+      const netAmount = Math.round((agg.credit - agg.debit) * 100) / 100;
+      const grossAmount = Math.round((inv.grandTotal || 0) * 100) / 100;
 
       b.buyerOrders.push({
-        invoiceId:    inv._id,
-        invoiceNumber: inv.invoiceNumber,
-        buyerName:    inv.buyerBranchId?.managerName,
-        buyerCompany: inv.buyerBranchId?.companyName,
-        quantity:     inv.quantity,
-        pricePerUnit: inv.pricePerUnit,
-        amount:       isReturned ? 0 : Math.round(inv.grandTotal * 100) / 100,
-        deduction:    Math.round((inv.supplierDeduction || 0) * 100) / 100,
-        netAmount:    isReturned ? 0 : Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100,
-        orderStatus:  inv.buyerOrderId?.status || null,
-        isReturned,
-        status:       inv.supplierPaymentStatus,
-        paidAt:       inv.supplierPaidAt || null,
+        invoiceId: inv._id, invoiceNumber: inv.invoiceNumber,
+        buyerName: inv.buyerBranchId?.managerName, buyerCompany: inv.buyerBranchId?.companyName,
+        quantity: inv.quantity, pricePerUnit: inv.pricePerUnit,
+        amount: agg.hasPenalty ? 0 : grossAmount,
+        deduction: Math.round(agg.debit * 100) / 100,
+        netAmount, isReturned: agg.hasPenalty,
+        orderStatus: inv.buyerOrderId ? "—" : null,
+        status: agg.allSettled ? "released" : "pending",
+        paidAt: inv.supplierPaidAt || null,
       });
 
-      // Returned order → amount 0, sirf penalty count karo
-      // Non-returned, pending → NET amount (grandTotal minus any penalty deduction already
-      // cut from this invoice) is what's actually still owed — this is what "Pay" will pay out.
-      if (!isReturned) {
-        const netAmount = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
-        b.totalAmount += inv.grandTotal || 0; // gross collected from buyers (reporting figure)
-        if (released) b.totalReleased += (inv.amountPaid != null ? inv.amountPaid : netAmount) || 0;
-        else          b.totalPending  += netAmount;
-      }
-      b.totalDeduction += inv.supplierDeduction || 0;
+      b.totalAmount   += netAmount;
+      b.totalDeduction += agg.debit;
+      if (agg.allSettled) b.totalReleased += netAmount;
+      else                b.totalPending  += netAmount;
     });
 
     const result = Object.values(bulkMap).map(b => ({
       ...b,
-      totalAmount:       Math.round(b.totalAmount      * 100) / 100,
-      totalPending:      Math.round(b.totalPending     * 100) / 100,
-      totalReleased:     Math.round(b.totalReleased    * 100) / 100,
-      totalDeduction:    Math.round(b.totalDeduction   * 100) / 100,
-      netToPaySupplier:  Math.round(b.totalPending      * 100) / 100, // alias — same net figure, kept for old callers
-      fullyPaid:         Math.round(b.totalPending     * 100) / 100 === 0,
-      buyerCount:        b.buyerOrders.length,
+      totalAmount:      Math.round(b.totalAmount     * 100) / 100,
+      totalPending:     Math.round(b.totalPending    * 100) / 100,
+      totalReleased:    Math.round(b.totalReleased   * 100) / 100,
+      totalDeduction:   Math.round(b.totalDeduction  * 100) / 100,
+      netToPaySupplier: Math.round(b.totalPending    * 100) / 100,
+      fullyPaid:        Math.round(b.totalPending    * 100) / 100 === 0,
+      buyerCount:       b.buyerOrders.length,
     }));
 
-    // Day totals
     const dayTotal = {
-      totalAmount:   Math.round(result.reduce((s, r) => s + r.totalAmount,   0) * 100) / 100,
-      totalPending:  Math.round(result.reduce((s, r) => s + r.totalPending,  0) * 100) / 100,
-      totalReleased: Math.round(result.reduce((s, r) => s + r.totalReleased, 0) * 100) / 100,
+      totalAmount:    Math.round(result.reduce((s, r) => s + r.totalAmount,   0) * 100) / 100,
+      totalPending:   Math.round(result.reduce((s, r) => s + r.totalPending,  0) * 100) / 100,
+      totalReleased:  Math.round(result.reduce((s, r) => s + r.totalReleased, 0) * 100) / 100,
       bulkOrderCount: result.length,
-      deadline:      new Date(new Date(date).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
-      daysLeft:      Math.ceil((new Date(date).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
+      deadline: new Date(new Date(date).getTime() + PAYMENT_DAYS * DAY_MS).toISOString().slice(0, 10),
+      daysLeft: Math.ceil((new Date(date).getTime() + PAYMENT_DAYS * DAY_MS - Date.now()) / DAY_MS),
     };
 
     res.json({ success: true, date, dayTotal, total: result.length, data: result });
@@ -523,75 +197,51 @@ exports.getDayBulkOrders = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  ADMIN — Pay Supplier (single bulk order OR all bulk orders of a day)
+//  ADMIN — Pay Supplier(s) — single bulk order OR all suppliers for a day
 //  POST /api/admin/supplier-payments/pay
-//  Body: { bulkOrderId } OR { date }  (ek dono me se)
-//  + { note, transactionRef }
+//  Body: { bulkOrderId } OR { date }, note, transactionRef
 // ═══════════════════════════════════════════════════════
 exports.paySupplier = async (req, res) => {
   try {
     const { bulkOrderId, date, note, transactionRef } = req.body;
-
     if (!bulkOrderId && !date) {
       return res.status(400).json({ success: false, message: "bulkOrderId or date required" });
     }
 
-    let filter = { invoiceType: "supplier", supplierPaymentStatus: "pending" };
+    let entityIds = [];
+    let commonOpts = { note, transactionRef, paidBy: req.admin._id };
+    const payouts = [];
 
     if (bulkOrderId) {
-      // Single bulk order ka payment
-      const bulk = await BulkOrder.findById(bulkOrderId);
-      if (!bulk) {
-        return res.status(404).json({ success: false, message: "Bulk order not found" });
+      entityIds = await ledger.getUnsettledEntityIds("supplier", {});
+      // narrow to suppliers who actually have unsettled entries for this bulk order
+      const relevant = await LedgerEntry.distinct("entityId", { entityType: "supplier", settled: false, bulkOrderId });
+      entityIds = relevant.map(id => id.toString());
+      for (const entityId of entityIds) {
+        const result = await ledger.settleAndPayout({ entityType: "supplier", entityId, extraFilter: { bulkOrderId }, ...commonOpts });
+        if (result) payouts.push(result);
       }
-      // Find all supplier invoices for this bulk
-      const invoiceIds = await Invoice.find({
-        bulkOrderId,
-        invoiceType: "supplier",
-        supplierPaymentStatus: "pending",
-      }).select("_id");
-
-      filter = { _id: { $in: invoiceIds.map(i => i._id) } };
     } else {
-      // All bulk orders of a day
       const start = new Date(date); start.setHours(0, 0, 0, 0);
       const end   = new Date(date); end.setHours(23, 59, 59, 999);
-      filter.createdAt = { $gte: start, $lte: end };
+      const relevant = await ledger.getUnsettledEntityIds("supplier", { start, end });
+      for (const entityId of relevant) {
+        const result = await ledger.settleAndPayout({ entityType: "supplier", entityId, start, end, ...commonOpts });
+        if (result) payouts.push(result);
+      }
     }
 
-    const invoices = await Invoice.find(filter);
-
-    if (invoices.length === 0) {
-      return res.status(400).json({ success: false, message: "No pending supplier invoices found" });
+    if (payouts.length === 0) {
+      return res.status(400).json({ success: false, message: "No pending supplier payments found" });
     }
 
-    const now = new Date();
-    let totalPaid = 0;
-
-    await Promise.all(invoices.map(async inv => {
-      // Some invoices in this batch may have a partial return-penalty deduction
-      // already cut from them (supplierDeduction) while still being "pending" —
-      // pay out the NET amount, not the gross grandTotal.
-      const netAmount = Math.round(((inv.grandTotal || 0) - (inv.supplierDeduction || 0)) * 100) / 100;
-      await Invoice.findByIdAndUpdate(inv._id, {
-        supplierPaymentStatus: "released",
-        supplierPaidAt:        now,
-        amountDue:             0,
-        amountPaid:            netAmount,
-      });
-      totalPaid += netAmount;
-    }));
+    const totalPaid = Math.round(payouts.reduce((s, p) => s + p.netAmount, 0) * 100) / 100;
+    const invoiceCount = payouts.reduce((s, p) => s + p.entryCount, 0);
 
     res.json({
       success: true,
-      message: `✅ Payment released to ${invoices.length} supplier invoice(s).`,
-      data: {
-        invoiceCount:   invoices.length,
-        totalPaid:      Math.round(totalPaid * 100) / 100,
-        paidAt:         now,
-        note:           note || null,
-        transactionRef: transactionRef || null,
-      },
+      message: `✅ Payment released to ${payouts.length} supplier(s).`,
+      data: { invoiceCount, totalPaid, paidAt: new Date(), note: note || null, transactionRef: transactionRef || null },
     });
   } catch (err) {
     console.error("paySupplier error:", err);
@@ -600,54 +250,36 @@ exports.paySupplier = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════
-//  ADMIN — Supplier Payment Records (per supplier)
+//  ADMIN — Supplier Payment Records (lifetime, per supplier)
 //  GET /api/admin/supplier-payments/suppliers
 // ═══════════════════════════════════════════════════════
 exports.getSupplierPaymentRecords = async (req, res) => {
   try {
-    const summary = await Invoice.aggregate([
-      { $match: { invoiceType: "supplier" } },
+    const summary = await LedgerEntry.aggregate([
+      { $match: { entityType: "supplier" } },
       {
         $group: {
-          _id:           "$supplierBranchId",
-          // "deducted" (fully returned, supplier_guilty) doesn't count as earned/pending
-          totalEarned:   { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, 0, "$grandTotal"] } },
-          totalReleased: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "released"] }, { $ifNull: ["$amountPaid", "$grandTotal"] }, 0] } },
-          totalPending:  { $sum: { $cond: [
-            { $in: ["$supplierPaymentStatus", ["released", "deducted"]] },
-            0,
-            { $subtract: ["$grandTotal", { $ifNull: ["$supplierDeduction", 0] }] },
-          ] } },
-          totalDeducted: { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, "$grandTotal", 0] } },
-          invoiceCount:  { $sum: { $cond: [{ $eq: ["$supplierPaymentStatus", "deducted"] }, 0, 1] } },
-          pendingCount:  { $sum: { $cond: [{ $in: ["$supplierPaymentStatus", ["released", "deducted"]] }, 0, 1] } },
+          _id: "$entityId",
+          totalEarned:   { $sum: { $cond: [{ $eq: ["$category", "order_earning"] }, "$amount", 0] } },
+          totalDeducted: { $sum: { $cond: [{ $eq: ["$category", "return_penalty"] }, "$amount", 0] } },
+          totalReleased: { $sum: { $cond: ["$settled", { $cond: [{ $eq: ["$direction", "credit"] }, "$amount", { $multiply: ["$amount", -1] }] }, 0] } },
+          totalPending:  { $sum: { $cond: [{ $eq: ["$settled", false] }, { $cond: [{ $eq: ["$direction", "credit"] }, "$amount", { $multiply: ["$amount", -1] }] }, 0] } },
+          invoiceCount:  { $sum: { $cond: [{ $eq: ["$category", "order_earning"] }, 1, 0] } },
+          pendingCount:  { $sum: { $cond: [{ $and: [{ $eq: ["$category", "order_earning"] }, { $eq: ["$settled", false] }] }, 1, 0] } },
           lastActivity:  { $max: "$createdAt" },
         },
       },
-      {
-        $lookup: {
-          from:         "branches",
-          localField:   "_id",
-          foreignField: "_id",
-          as:           "branch",
-        },
-      },
+      { $lookup: { from: "branches", localField: "_id", foreignField: "_id", as: "branch" } },
       { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
       {
         $project: {
-          branchId:     "$_id",
-          supplierName: "$branch.managerName",
-          companyName:  "$branch.companyName",
-          email:        "$branch.email",
-          phone:        "$branch.phone",
-          bankDetails:  "$branch.bankDetails",
+          branchId: "$_id", supplierName: "$branch.managerName", companyName: "$branch.companyName",
+          email: "$branch.email", phone: "$branch.phone", bankDetails: "$branch.bankDetails",
           totalEarned:   { $round: ["$totalEarned",   2] },
           totalReleased: { $round: ["$totalReleased", 2] },
           totalPending:  { $round: ["$totalPending",  2] },
           totalDeducted: { $round: ["$totalDeducted", 2] },
-          invoiceCount: 1,
-          pendingCount: 1,
-          lastActivity: 1,
+          invoiceCount: 1, pendingCount: 1, lastActivity: 1,
         },
       },
       { $sort: { totalPending: -1 } },

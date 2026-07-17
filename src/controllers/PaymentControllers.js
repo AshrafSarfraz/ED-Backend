@@ -762,6 +762,8 @@ exports.supplierPaymentSummary = async (req, res) => {
       return res.status(403).json({ success: false, message: "Only suppliers can access this" });
     }
 
+    const LedgerEntry = require("../models/ledger/LedgerEntry");
+
     const invoices = await Invoice.find({
       supplierBranchId: req.branch._id,
       invoiceType:      "supplier",
@@ -770,7 +772,22 @@ exports.supplierPaymentSummary = async (req, res) => {
       .populate("countryId",      "name")
       .populate("bulkOrderId",    "totalQuantity winningPrice status isLate lateReason")
       .populate("buyerBranchId",  "managerName companyName")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const invoiceIds = invoices.map(i => i._id);
+    const entries = await LedgerEntry.find({
+      entityType: "supplier", entityId: req.branch._id, invoiceId: { $in: invoiceIds },
+    }).lean();
+
+    // Net (credit - debit) + settled status per invoice
+    const perInvoice = {};
+    entries.forEach(e => {
+      const id = e.invoiceId.toString();
+      if (!perInvoice[id]) perInvoice[id] = { net: 0, allSettled: true };
+      perInvoice[id].net += e.direction === "credit" ? e.amount : -e.amount;
+      if (!e.settled) perInvoice[id].allSettled = false;
+    });
 
     const bulkMap = {};
 
@@ -797,8 +814,9 @@ exports.supplierPaymentSummary = async (req, res) => {
         };
       }
 
-      const released = inv.supplierPaymentStatus === "released";
-      const amount   = Math.round(inv.grandTotal * 100) / 100;
+      const agg      = perInvoice[inv._id.toString()] || { net: 0, allSettled: false };
+      const amount   = Math.round(agg.net * 100) / 100;
+      const released = agg.allSettled && agg.net !== 0;
 
       bulkMap[bulkId].buyers.push({
         buyerName: inv.buyerBranchId?.managerName,

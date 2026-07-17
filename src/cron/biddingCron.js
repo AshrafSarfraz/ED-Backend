@@ -448,6 +448,7 @@ const SupplierItem = require("../models/supplier/supplierCatalog");
 const Branch       = require("../models/Branch");
 const { getBiddingSettings } = require("./settingService");
 const { getCommissionSettings } = require("./commissionSettingService");
+const ledger = require("../services/ledgerService");
 const {
   sendOrderCancelledEmail,
   sendOrderWonEmail,
@@ -762,7 +763,7 @@ const runWinnerSelect = async (settings) => {
         const supplierInvNum = `INV-S-${dateStr}-${invNum}`;
 
         // ─── Buyer invoice ────────────────────────────────
-        await Invoice.create({
+        const buyerInvoiceDoc = await Invoice.create({
           buyerOrderId:     bo._id,
           bulkOrderId:      bulkOrder._id,
           buyerBranchId:    bo.buyerBranchId._id,
@@ -787,7 +788,7 @@ const runWinnerSelect = async (settings) => {
         });
 
         // ─── Supplier invoice — SAME invNum ───────────────
-        await Invoice.create({
+        const supplierInvoiceDoc = await Invoice.create({
           buyerOrderId:     bo._id,
           bulkOrderId:      bulkOrder._id,
           buyerBranchId:    bo.buyerBranchId._id,
@@ -811,6 +812,23 @@ const runWinnerSelect = async (settings) => {
           dueDate,
           supplierPaymentStatus: "pending",
         });
+
+        // ─── Ledger — supplier earns the full order amount, platform earns its 2% ───
+        // (rider's 1% is credited separately at actual delivery time — see riderDelivery.js)
+        try {
+          await ledger.creditSupplier(
+            winningBid.supplierBranchId, rawTotal, "order_earning",
+            { invoiceId: supplierInvoiceDoc._id, bulkOrderId: bulkOrder._id, buyerOrderId: bo._id },
+            `Order earning — ${supplierInvNum}`
+          );
+          await ledger.creditPlatform(
+            commissionAmount, "commission",
+            { invoiceId: buyerInvoiceDoc._id, bulkOrderId: bulkOrder._id, buyerOrderId: bo._id },
+            `Platform commission — ${buyerInvNum}`
+          );
+        } catch (ledgerErr) {
+          console.error("Ledger entry error (order won):", ledgerErr);
+        }
 
         await sendOrderWonEmail({
           toEmail:      bo.buyerBranchId.email,
