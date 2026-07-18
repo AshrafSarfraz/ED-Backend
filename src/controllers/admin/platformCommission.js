@@ -2,7 +2,7 @@
 // Platform ka asal 2% commission — Invoice.commissionAmount se seedha, client-side
 // recompute nahi (jo returns/deductions ko account nahi karta tha aur galat 3% dikhata tha).
 const Invoice = require("../../models/invoice");
-
+const { getCommissionSettings } = require("../../cron/commissionSettingService");
 // ═══════════════════════════════════════════════════════
 //  GET /api/admin/commission-records
 //  Per bulk order — platform's 2% commission (Invoice.commissionAmount).
@@ -11,6 +11,8 @@ const Invoice = require("../../models/invoice");
 // ═══════════════════════════════════════════════════════
 exports.getCommissionRecords = async (req, res) => {
   try {
+    const settings = await getCommissionSettings(); // current live % (for NEW orders)
+ 
     const summary = await Invoice.aggregate([
       { $match: { invoiceType: "buyer" } },
       {
@@ -18,8 +20,9 @@ exports.getCommissionRecords = async (req, res) => {
           _id:               "$bulkOrderId",
           buyerCount:        { $sum: 1 },
           totalQuantity:     { $sum: "$quantity" },
-          totalCommission:   { $sum: "$commissionAmount" }, // 2% — platform's actual earning
-          totalDeliveryFee:  { $sum: "$deliveryAmount" },   // 1% — rider's (reference only)
+          totalAmount:       { $sum: "$totalAmount" },     // raw order value, before fees
+          totalCommission:   { $sum: "$commissionAmount" }, // platform's actual earning (whatever % was live then)
+          totalDeliveryFee:  { $sum: "$deliveryAmount" },   // rider's fee (reference only)
           totalBuyerPaid:    { $sum: "$grandTotal" },
           pricePerUnit:      { $first: "$pricePerUnit" },
           bidDate:           { $min: "$bidDate" },
@@ -49,6 +52,7 @@ exports.getCommissionRecords = async (req, res) => {
           totalQuantity:    1,
           winningPrice:     "$bulk.winningPrice",
           pricePerUnit:     1,
+          totalAmount:      { $round: ["$totalAmount",      2] },
           totalCommission:  { $round: ["$totalCommission",  2] },
           totalDeliveryFee: { $round: ["$totalDeliveryFee", 2] },
           totalBuyerPaid:   { $round: ["$totalBuyerPaid",   2] },
@@ -58,16 +62,35 @@ exports.getCommissionRecords = async (req, res) => {
       },
       { $sort: { createdAt: -1 } },
     ]);
-
+ 
+    // Har row ka apna effective % — jo actually us order ke waqt lagi thi (settings
+    // badalne se purane orders ka displayed % kabhi galat nahi hoga)
+    const withPct = summary.map(r => ({
+      ...r,
+      commissionPct:  r.totalAmount > 0 ? Math.round((r.totalCommission  / r.totalAmount) * 1000) / 10 : 0,
+      deliveryFeePct: r.totalAmount > 0 ? Math.round((r.totalDeliveryFee / r.totalAmount) * 1000) / 10 : 0,
+    }));
+ 
     const overall = {
-      totalCommission:  Math.round(summary.reduce((s, r) => s + (r.totalCommission  || 0), 0) * 100) / 100,
-      totalDeliveryFee: Math.round(summary.reduce((s, r) => s + (r.totalDeliveryFee || 0), 0) * 100) / 100,
-      totalBuyerPaid:   Math.round(summary.reduce((s, r) => s + (r.totalBuyerPaid   || 0), 0) * 100) / 100,
+      totalAmount:      Math.round(withPct.reduce((s, r) => s + (r.totalAmount      || 0), 0) * 100) / 100,
+      totalCommission:  Math.round(withPct.reduce((s, r) => s + (r.totalCommission  || 0), 0) * 100) / 100,
+      totalDeliveryFee: Math.round(withPct.reduce((s, r) => s + (r.totalDeliveryFee || 0), 0) * 100) / 100,
+      totalBuyerPaid:   Math.round(withPct.reduce((s, r) => s + (r.totalBuyerPaid   || 0), 0) * 100) / 100,
     };
-
-    res.json({ success: true, overall, total: summary.length, data: summary });
+    // Overall effective % — actual weighted average across all records shown
+    overall.commissionPct  = overall.totalAmount > 0 ? Math.round((overall.totalCommission  / overall.totalAmount) * 1000) / 10 : settings.platformCommission;
+    overall.deliveryFeePct = overall.totalAmount > 0 ? Math.round((overall.totalDeliveryFee / overall.totalAmount) * 1000) / 10 : settings.deliveryFee;
+ 
+    res.json({
+      success: true,
+      overall,
+      currentSettings: { platformCommission: settings.platformCommission, deliveryFee: settings.deliveryFee }, // for NEW orders going forward
+      total: withPct.length,
+      data: withPct,
+    });
   } catch (err) {
     console.error("getCommissionRecords error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+ 
