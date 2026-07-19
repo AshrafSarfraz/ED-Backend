@@ -19,6 +19,25 @@ const LedgerEntry = require("../src/models/ledger/LedgerEntry");
 
 let created = 0, skipped = 0, errors = 0;
 let buyerCancelled = 0, buyerSkipped = 0;
+let commReversed = 0, commSkipped = 0;
+
+async function reverseCommission(ro, buyerInvoice) {
+  if (!buyerInvoice?.commissionAmount) return;
+  try {
+    await LedgerEntry.create({
+      entityType: "platform", entityId: "000000000000000000000001",
+      direction: "debit", amount: buyerInvoice.commissionAmount, category: "commission_reversal",
+      invoiceId: buyerInvoice._id, bulkOrderId: ro.bulkOrderId, returnOrderId: ro._id,
+      settled: false,
+      note: `Backfilled commission reversal — ${buyerInvoice.invoiceNumber}`,
+    });
+    commReversed++;
+    console.log(`  ✓ Commission reversed QAR ${buyerInvoice.commissionAmount} for return ${ro._id}`);
+  } catch (err) {
+    if (err.code === 11000) commSkipped++;
+    else console.error(`  ✗ commission reversal for return ${ro._id}:`, err.message);
+  }
+}
 
 async function run() {
   await new Promise((resolve, reject) => {
@@ -80,6 +99,9 @@ async function run() {
     } else {
       console.log(`  ⚠ No buyer invoice found for return ${ro._id}`);
     }
+
+    // ─── 3. Platform commission reversal ───
+    if (buyerInvoice) await reverseCommission(ro, buyerInvoice);
   }
 
   // ─── Rider-guilty returns — buyer invoice cancellation only (no supplier ledger touch) ───
@@ -105,6 +127,9 @@ async function run() {
     } else {
       console.log(`  ⚠ No buyer invoice found for return ${ro._id}`);
     }
+
+    // ─── Platform commission reversal (rider guilty too) ───
+    if (buyerInvoice) await reverseCommission(ro, buyerInvoice);
   }
 
   console.log(`\n✅ Backfill complete.`);
@@ -112,6 +137,8 @@ async function run() {
   console.log(`   Supplier reversals already existed: ${skipped}`);
   console.log(`   Buyer invoices cancelled: ${buyerCancelled}`);
   console.log(`   Buyer invoices already cancelled: ${buyerSkipped}`);
+  console.log(`   Commission reversals created: ${commReversed}`);
+  console.log(`   Commission reversals already existed: ${commSkipped}`);
   console.log(`   Errors: ${errors}`);
   process.exit(errors > 0 ? 1 : 0);
 }
