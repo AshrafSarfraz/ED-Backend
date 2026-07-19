@@ -82,6 +82,31 @@ async function run() {
     }
   }
 
+  // ─── Rider-guilty returns — buyer invoice cancellation only (no supplier ledger touch) ───
+  const riderGuiltyReturns = await ReturnOrder.find({ status: "resolved_rider_guilty" }).lean();
+  console.log(`\nFound ${riderGuiltyReturns.length} resolved_rider_guilty returns...`);
+
+  for (const ro of riderGuiltyReturns) {
+    const buyerInvoice = await Invoice.findOne({
+      buyerOrderId: ro.buyerOrderId,
+      invoiceType:  "buyer",
+    });
+    if (buyerInvoice && buyerInvoice.paymentStatus !== "cancelled") {
+      await Invoice.findByIdAndUpdate(buyerInvoice._id, {
+        paymentStatus: "cancelled",
+        amountDue:     0,
+        refundAmount:  buyerInvoice.amountPaid || 0,
+        amountPaid:    0,
+      });
+      buyerCancelled++;
+      console.log(`  ✓ Cancelled buyer invoice ${buyerInvoice.invoiceNumber} for return ${ro._id} (rider guilty)`);
+    } else if (buyerInvoice) {
+      buyerSkipped++;
+    } else {
+      console.log(`  ⚠ No buyer invoice found for return ${ro._id}`);
+    }
+  }
+
   console.log(`\n✅ Backfill complete.`);
   console.log(`   Supplier reversals created: ${created}`);
   console.log(`   Supplier reversals already existed: ${skipped}`);
