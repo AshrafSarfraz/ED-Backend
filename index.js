@@ -65,7 +65,7 @@ app.use("/api/admin", require("./src/routes/admin/platformCommission.route"));
 app.use("/api/admin", require("./src/routes/admin/profiles.route"));
 app.use("/api/bidding-schedule", require("./src/routes/biddingSchedule.route"));
 
-app.use("/api/app", require("./src/routes/AppConfig/AppConfig"))  
+app.use("/api/config", require("./src/routes/AppConfig/AppConfig"))  
 
 
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
