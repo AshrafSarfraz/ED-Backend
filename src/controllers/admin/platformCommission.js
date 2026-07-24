@@ -27,7 +27,11 @@ exports.getCommissionRecords = async (req, res) => {
           // Cancelled invoices (return resolved, supplier guilty) don't count — buyer never
           // paid for these, so platform never earned commission on them either.
           totalAmount:       { $sum: { $cond: [{ $eq: ["$paymentStatus", "cancelled"] }, 0, "$totalAmount"] } },
-          totalCommission:   { $sum: { $cond: [{ $eq: ["$paymentStatus", "cancelled"] }, 0, "$commissionAmount"] } },
+          totalCommission:   { $sum: { $cond: [
+            { $and: [{ $eq: ["$paymentStatus", "cancelled"] }, { $ne: ["$returnReason", "rider_guilty"] }] },
+            0,
+            "$commissionAmount",
+          ] } },
           totalBuyerPaid:    { $sum: { $cond: [{ $eq: ["$paymentStatus", "cancelled"] }, 0, "$grandTotal"] } },
           totalCancelled:    { $sum: { $cond: [{ $eq: ["$paymentStatus", "cancelled"] }, "$grandTotal", 0] } },
           pricePerUnit:      { $first: "$pricePerUnit" },
