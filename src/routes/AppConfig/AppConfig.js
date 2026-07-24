@@ -9,7 +9,7 @@ const {
   updateBanner,
   toggleBanner,
   deleteBanner,
-} = require("../../controllers/appConfig/bannerController");
+} = require("../../controllers/AppConfig/bannerController");
 
 const {
   getAllFaqsAdmin,
@@ -17,13 +17,13 @@ const {
   updateFaq,
   toggleFaq,
   deleteFaq,
-} = require("../../controllers/appConfig/faqController");
+} = require("../../controllers/AppConfig/faqController");
 
 const {
   getAllTermsAdmin,
   addTerms,
   updateTerms,
-} = require("../../controllers/appConfig/termsController");
+} = require("../../controllers/AppConfig/termsController");
 
 // ─── Banners ──────────────────────────────────────────────
 router.get   ("/app/banners",          protectAdmin, adminOnly, getAllBannersAdmin);
