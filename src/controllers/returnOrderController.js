@@ -480,25 +480,15 @@ exports.adminResolve = async (req, res) => {
     //        deliverStop (the forward leg genuinely happened) — earning and debt are
     //        separate ledger entries, netted automatically whenever balance is read.
     if (decision === "rider_guilty") {
-      // 1. Buyer invoice — cancel it (mirrors supplier_guilty's buyer-side handling).
-      //    If they'd already paid something, track refundAmount for admin to refund.
+   
       await Invoice.findByIdAndUpdate(invoice._id, {
         paymentStatus: "cancelled",
+        returnReason:  "rider_guilty",
         amountDue:     0,
         refundAmount:  invoice.amountPaid || 0,
         amountPaid:    0,
       });
-
-      // 1b. Platform commission reversal — buyer isn't paying for this order at all
-      //     (rider covers the full debt instead), so platform shouldn't keep the
-      //     commission either — same logic as supplier_guilty's reversal.
-      if (invoice?.commissionAmount > 0) {
-        await ledger.debitPlatform(
-          invoice.commissionAmount, "commission_reversal",
-          { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, returnOrderId: returnOrder._id },
-          `Commission reversed (rider guilty) — ${invoice.invoiceNumber}`
-        );
-      }
+      
 
       // 2. BuyerOrder → returned
       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
