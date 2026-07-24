@@ -469,16 +469,6 @@ exports.adminResolve = async (req, res) => {
     }
 
     // ─── RIDER GUILTY ────────────────────────────────────
-    // Buyer: invoice CANCELLED — buyer doesn't owe/pay for this order. Rider's debt
-    //        (below) already covers the full order value, so buyer is made whole
-    //        without the platform having to separately chase/refund them.
-    // Supplier: untouched — their delivery was correct, payment releases normally
-    //           (their order_earning ledger credit from invoice-creation time stands).
-    // Rider: full order amount becomes a ledger DEBIT — this money will never be
-    //        recovered from buyer/supplier, so it comes out of the rider's pocket.
-    //        The rider ALSO keeps the 1% "delivery_fee" credit already recorded at
-    //        deliverStop (the forward leg genuinely happened) — earning and debt are
-    //        separate ledger entries, netted automatically whenever balance is read.
     if (decision === "rider_guilty") {
    
       await Invoice.findByIdAndUpdate(invoice._id, {
@@ -489,7 +479,6 @@ exports.adminResolve = async (req, res) => {
         amountPaid:    0,
       });
       
-
       // 2. BuyerOrder → returned
       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
 
