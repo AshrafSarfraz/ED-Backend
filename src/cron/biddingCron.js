@@ -476,6 +476,11 @@ const {
   sendOrdersWonSummaryEmail,
   sendOrdersCancelledSummaryEmail,
 } = require("../utils/sendEmail");
+const {
+  notifyBiddingResult,
+  notifyBiddingStarted,
+  getTokensForBranches,
+} = require("../notification/notificationService");
 
 let biddingStartJob = null;
 let winnerJob       = null;
@@ -553,8 +558,11 @@ const pushToDigest = (digest, branch, bucket, row) => {
   const key = String(branch._id);
   if (!digest.has(key)) {
     digest.set(key, {
+      branchId:    branch._id,
       email:       branch.email,
       managerName: branch.managerName || "Customer",
+      // populate() se aa jaate hain — push bhejne ke liye extra DB query nahi lagti
+      fcmTokens:   branch.fcmTokens || [],
       won:         [],
       cancelled:   [],
     });
@@ -564,23 +572,118 @@ const pushToDigest = (digest, branch, bucket, row) => {
 
 const flushDigest = async (digest) => {
   if (digest.size === 0) return;   // kuch process nahi hua — chup raho
+
   for (const d of digest.values()) {
-    try {
-      if (d.won.length > 0) {
+    // ─── EMAILS — won aur cancelled ki ALAG ALAG ─────────
+    if (d.won.length > 0) {
+      try {
         await sendOrdersWonSummaryEmail({
           toEmail: d.email, managerName: d.managerName, orders: d.won,
         });
+      } catch (err) {
+        console.error(`Won email failed for ${d.email}:`, err.message);
       }
-      if (d.cancelled.length > 0) {
+    }
+
+    if (d.cancelled.length > 0) {
+      try {
         await sendOrdersCancelledSummaryEmail({
           toEmail: d.email, managerName: d.managerName, orders: d.cancelled,
         });
+      } catch (err) {
+        console.error(`Cancelled email failed for ${d.email}:`, err.message);
       }
+    }
+
+    // ─── PUSH — won + cancelled dono EK hi notification me ───
+    //  Push alag try me hai: email fail ho to push phir bhi jaye, aur ulta bhi.
+    try {
+      const grandTotal = Math.round(
+        d.won.reduce((s, o) => s + (o.totalAmount || 0), 0) * 100
+      ) / 100;
+
+      await notifyBiddingResult(d.branchId, {
+        wonCount:       d.won.length,
+        cancelledCount: d.cancelled.length,
+        grandTotal,
+      }, d.fcmTokens);
     } catch (err) {
-      console.error(`Digest email failed for ${d.email}:`, err.message);
+      console.error(`Bidding result push failed for ${d.branchId}:`, err.message);
     }
   }
-  console.log(`📧 Summary emails sent to ${digest.size} buyer(s)`);
+
+  console.log(`📧 Emails + 🔔 push → ${digest.size} buyer(s)`);
+};
+
+// ─────────────────────────────────────────────────────────
+//  TRIGGER 4 — Bidding start pe eligible suppliers ko notify karo
+//
+//  "Eligible" ka matlab BILKUL wahi rule jo getActiveBiddings use karta hai
+//  (bids.js) — warna supplier ko notification aayegi aur app me bidding
+//  dikhegi hi nahi:
+//      SupplierItem: isListed = true  AND  isAvailableToday = true
+//  Aur upar se branch approved + active + banned nahi (getTokensForBranches).
+//
+//  Ek supplier ke liye 3 biddings khuli hon to bhi EK hi push jaati hai.
+// ─────────────────────────────────────────────────────────
+const notifyEligibleSuppliers = async (openedBulkOrders) => {
+  if (!openedBulkOrders || openedBulkOrders.length === 0) return;
+
+  try {
+    // supplierBranchId(string) → { count, sampleItem }
+    const perSupplier = new Map();
+
+    for (const { platformItemId, countryId, itemName } of openedBulkOrders) {
+      const supplierItems = await SupplierItem.find({
+        platformItemId,
+        countryId,
+        isListed:         true,
+        isAvailableToday: true,
+      }).select("branchId");
+
+      // Ek hi branch ke same item ke do record ho to double count na ho
+      const seen = new Set();
+      for (const si of supplierItems) {
+        const bid = String(si.branchId);
+        if (seen.has(bid)) continue;
+        seen.add(bid);
+
+        if (!perSupplier.has(bid)) {
+          perSupplier.set(bid, { count: 0, sampleItem: itemName || null });
+        }
+        perSupplier.get(bid).count += 1;
+      }
+    }
+
+    if (perSupplier.size === 0) {
+      console.log("🔔 Bidding start — koi eligible supplier nahi");
+      return;
+    }
+
+    // Sab tokens EK query me — 50 supplier ho to 50 query nahi maarni
+    const tokenMap = await getTokensForBranches([...perSupplier.keys()]);
+
+    let pushed = 0;
+    for (const [branchId, info] of perSupplier.entries()) {
+      const tokens = tokenMap.get(branchId);
+      if (!tokens) continue;   // app install nahi / logout / approved nahi
+
+      try {
+        await notifyBiddingStarted(branchId, {
+          biddingCount: info.count,
+          sampleItem:   info.sampleItem,
+        }, tokens);
+        pushed += 1;
+      } catch (err) {
+        console.error(`Bidding start push failed for ${branchId}:`, err.message);
+      }
+    }
+
+    console.log(`🔔 Bidding start push → ${pushed} supplier(s) of ${perSupplier.size} eligible`);
+  } catch (err) {
+    // Notification fail hona bidding ko kabhi na toray
+    console.error("notifyEligibleSuppliers error:", err.message);
+  }
 };
 
 // ─────────────────────────────────────────────────────────
@@ -671,6 +774,9 @@ const runBiddingStart = async (settings) => {
 
     console.log(`🕒 Start: ${biddingStartsAt.toISOString()} | End: ${biddingEndsAt.toISOString()}`);
 
+    // Jo biddings actually khuli — inhi ke eligible suppliers ko notify karenge (Trigger 4)
+    const openedBulkOrders = [];
+
     for (const key of Object.keys(groups)) {
       const g = groups[key];
 
@@ -703,6 +809,15 @@ const runBiddingStart = async (settings) => {
             { status: "in_bidding" }
           );
         }
+        // NAYE orders add hue tabhi notification — warna roz same bidding pe
+        // supplier ko dobara push jaata rahega
+        if (newOrderIds.length > 0) {
+          openedBulkOrders.push({
+            platformItemId: g.platformItemId,
+            countryId:      g.countryId,
+          });
+        }
+
         console.log(`♻️ BulkOrder updated: ${existingBulk._id}`);
       } else {
         const bulkOrder = await BulkOrder.create({
@@ -720,9 +835,21 @@ const runBiddingStart = async (settings) => {
           { _id: { $in: g.buyerOrderIds } },
           { status: "in_bidding", bulkOrderId: bulkOrder._id }
         );
+        openedBulkOrders.push({
+          platformItemId: g.platformItemId,
+          countryId:      g.countryId,
+        });
+
         console.log(`✅ BulkOrder: ${bulkOrder._id}`);
       }
     }
+
+    // ─── TRIGGER 4 — item ke naam bhar do, phir eligible suppliers ko push ───
+    for (const o of openedBulkOrders) {
+      const item = await PlatformItem.findById(o.platformItemId).select("name");
+      o.itemName = item?.name || null;
+    }
+    await notifyEligibleSuppliers(openedBulkOrders);
   } catch (err) {
     console.error("Bidding Start error:", err);
   }

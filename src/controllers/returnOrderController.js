@@ -1,5 +1,3 @@
-
-
 // 📁 controllers/returnOrderController.js
 const ReturnOrder    = require("../models/returnOrder/ReturnOrder");
 const ReturnDelivery = require("../models/returnOrder/ReturnDelivery");
@@ -14,6 +12,7 @@ const Branch         = require("../models/Branch");
 const DeliveryOrder  = require("../models/riderCompany/orderDelivery");
 const { getCommissionSettings } = require("../cron/commissionSettingService");
 const { uploadToFirebase } = require("../config/uploadToFirebase");
+const { notifyReturnRequest } = require("../notification/notificationService");
 
 // ═══════════════════════════════════════════════════════
 //  SHARED — Resolve a return as "supplier guilty"
@@ -231,6 +230,23 @@ exports.submitReturn = async (req, res) => {
 
     // BuyerOrder status update
     await BuyerOrder.findByIdAndUpdate(order._id, { status: "return_requested" });
+
+    // ─── 🔔 TRIGGER 3 — SUPPLIER ko notification ───────────
+    //  Item ka naam invoice ke platformItemId se; populate na karna pade
+    //  isliye seedha ek chhoti query. Push fail ho to return request
+    //  phir bhi save rahegi (try/catch), buyer ko error nahi milega.
+    try {
+      const PlatformItem = require("../models/masterData/PlatformItem");
+      const item = await PlatformItem.findById(invoice.platformItemId).select("name");
+
+      await notifyReturnRequest(invoice.supplierBranchId, {
+        itemName:      item?.name,
+        subject,
+        returnOrderId: returnOrder._id,
+      });
+    } catch (notifErr) {
+      console.error("Return request push failed:", notifErr.message);
+    }
 
     res.status(201).json({
       success: true,
@@ -657,3 +673,666 @@ exports.getSupplierDebts = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
+
+
+
+// // 📁 controllers/returnOrderController.js
+// const ReturnOrder    = require("../models/returnOrder/ReturnOrder");
+// const ReturnDelivery = require("../models/returnOrder/ReturnDelivery");
+// const SupplierDebt   = require("../models/returnOrder/SupplierDebt");
+// const RiderDebt      = require("../models/returnOrder/RiderDebt");
+// const RiderEarning   = require("../models/riderCompany/riderEarning");
+// const ledger         = require("../services/ledgerService");
+// const BuyerOrder     = require("../models/buyer/buyerOrder");
+// const BulkOrder      = require("../models/BulkOrder");
+// const Invoice        = require("../models/invoice");
+// const Branch         = require("../models/Branch");
+// const DeliveryOrder  = require("../models/riderCompany/orderDelivery");
+// const { getCommissionSettings } = require("../cron/commissionSettingService");
+// const { uploadToFirebase } = require("../config/uploadToFirebase");
+
+// // ═══════════════════════════════════════════════════════
+// //  SHARED — Resolve a return as "supplier guilty"
+// //  Used both when supplier self-accepts (auto-resolve, no admin wait)
+// //  and when admin manually decides supplier_guilty.
+// //
+// //  Money flow:
+// //    - Buyer: order status → "returned" (payment progress untouched —
+// //      buyer still pays on their normal 30-day cycle; we don't force it "paid")
+// //    - Supplier: 2% penalty (supplierPenalty setting) cut from their payout
+// //    - Rider: already earned 1% for the forward delivery (created at deliverStop).
+// //      Now credited ANOTHER 1% for the return-pickup leg — funded by the
+// //      2% penalty just cut from the supplier. Order status → "returned" for supplier too.
+// // ═══════════════════════════════════════════════════════
+// async function resolveSupplierGuilty(returnOrder, invoice, { resolvedBy, note }) {
+//   const now = new Date();
+
+//   // 0. Buyer invoice — cancel it. Item is going back to the supplier, buyer never
+//   //    keeps the goods, so buyer should NOT owe (or have already paid for) this order.
+//   //    If they'd already paid something before the return, track it as refundAmount
+//   //    so admin knows to refund them — don't just silently keep their money.
+//   if (invoice) {
+//     await Invoice.findByIdAndUpdate(invoice._id, {
+//       paymentStatus: "cancelled",
+//       amountDue:     0,
+//       refundAmount:  invoice.amountPaid || 0,
+//       amountPaid:    0,
+//     });
+//   }
+
+//   // 1. Supplier invoice — mark THIS specific invoice as "deducted" (informational/display only —
+//   //    the actual money impact now lives entirely in the ledger, not in Invoice fields).
+//   const supplierInvoice = await Invoice.findOne({
+//     buyerOrderId: returnOrder.buyerOrderId,
+//     invoiceType:  "supplier",
+//   });
+//   if (supplierInvoice) {
+//     await Invoice.findByIdAndUpdate(supplierInvoice._id, {
+//       supplierPaymentStatus: "deducted",
+//       amountDue:             0,
+//     });
+//   }
+
+//   // 2. BuyerOrder status
+//   await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
+
+//   // 3. Order earning REVERSAL — supplier ko is order ka koi paisa nahi milna chahiye,
+//   //    kyunki item wapas unke paas ja raha hai (ReturnDelivery). Sirf 2% penalty debit
+//   //    karna kaafi nahi tha — original 100% order_earning credit bhi reverse karna zaroori hai,
+//   //    warna supplier ka balance abhi bhi ~98% "owed" dikhta rehta tha (asal bug jo mila).
+//   const supplierEarningAmount = supplierInvoice?.grandTotal || invoice?.totalAmount || 0;
+//   if (supplierEarningAmount > 0) {
+//     await ledger.debitSupplier(
+//       returnOrder.supplierBranchId, supplierEarningAmount, "order_earning_reversal",
+//       { invoiceId: supplierInvoice?._id, bulkOrderId: returnOrder.bulkOrderId, returnOrderId: returnOrder._id },
+//       `Order earning reversed (item returned) — ${supplierInvoice?.invoiceNumber || returnOrder._id}`
+//     );
+//   }
+
+//   // 3b. Platform commission reversal — order cancel hua, buyer ne kuch paid nahi kiya,
+//   //     isliye platform ka commission bhi wapas hona chahiye (warna raw ledger balance
+//   //     stale/inflated reh jaata hai, jo Commission page ke asal number se mismatch karta).
+//   if (invoice?.commissionAmount > 0) {
+//     await ledger.debitPlatform(
+//       invoice.commissionAmount, "commission_reversal",
+//       { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, returnOrderId: returnOrder._id },
+//       `Commission reversed (item returned) — ${invoice.invoiceNumber}`
+//     );
+//   }
+
+//   // 4. Penalty (2%) — additional ledger debit on top of the reversal above.
+//   //    No more hunting through "same bulk order" / "next pending bulk order" invoices to
+//   //    manually cut amountDue from — the ledger nets this against ALL of the supplier's
+//   //    earnings automatically whenever their balance is read. Much simpler, zero drift risk.
+//   const penaltyAmount = returnOrder.penaltyAmount;
+//   await ledger.debitSupplier(
+//     returnOrder.supplierBranchId, penaltyAmount, "return_penalty",
+//     { invoiceId: supplierInvoice?._id, bulkOrderId: returnOrder.bulkOrderId, returnOrderId: returnOrder._id },
+//     `Return penalty — ${supplierInvoice?.invoiceNumber || returnOrder._id}`
+//   );
+
+//   // 5. Reverse delivery (buyer → supplier)
+//   const buyerBranch    = await Branch.findById(returnOrder.buyerBranchId);
+//   const supplierBranch = await Branch.findById(returnOrder.supplierBranchId);
+
+//   const returnDelivery = await ReturnDelivery.create({
+//     returnOrderId:     returnOrder._id,
+//     deliveryCompanyId: returnOrder.deliveryCompanyId,
+//     buyerBranchId:     returnOrder.buyerBranchId,
+//     supplierBranchId:  returnOrder.supplierBranchId,
+//     pickupAddress: {
+//       lat: buyerBranch?.address?.lat, lng: buyerBranch?.address?.lng, address: buyerBranch?.address?.address,
+//     },
+//     dropAddress: {
+//       lat: supplierBranch?.address?.lat, lng: supplierBranch?.address?.lng, address: supplierBranch?.address?.address,
+//     },
+//   });
+
+//   // 6. Rider earning — extra 1% for the return-pickup leg (funded by the 2% penalty above).
+//   //    The normal 1% forward-leg earning already exists as a ledger entry from deliverStop.
+//   if (returnOrder.deliveryCompanyId && invoice?.deliveryAmount > 0) {
+//     await ledger.creditRider(
+//       returnOrder.deliveryCompanyId, invoice.deliveryAmount, "return_leg_fee",
+//       { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, buyerOrderId: returnOrder.buyerOrderId, returnOrderId: returnOrder._id },
+//       `Return-leg fee — ${invoice.invoiceNumber}`
+//     );
+//   }
+
+//   // 6. ReturnOrder update
+//   await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+//     status:            "resolved_supplier_guilty",
+//     adminNote:         note || null,
+//     adminResolvedAt:   now,
+//     resolvedBy:        resolvedBy || null,
+//     penaltyApplied:    true,
+//   });
+
+//   return { penaltyAmount, returnDeliveryId: returnDelivery._id };
+// }
+
+// // ═══════════════════════════════════════════════════════
+// //  BUYER — Submit Return Request
+// //  POST /api/returns/buyer/submit
+// //  Body: { buyerOrderId, subject, description }
+// //  Files: images (max 3)
+// // ═══════════════════════════════════════════════════════
+// exports.submitReturn = async (req, res) => {
+//   try {
+//     if (req.branch.accountType !== "Buyer") {
+//       return res.status(403).json({ success: false, message: "Only buyers can submit returns" });
+//     }
+
+//     const { buyerOrderId, subject, description } = req.body;
+
+//     if (!buyerOrderId || !subject || !description) {
+//       return res.status(400).json({ success: false, message: "buyerOrderId, subject, description required" });
+//     }
+
+//     const order = await BuyerOrder.findOne({
+//       _id:           buyerOrderId,
+//       buyerBranchId: req.branch._id,
+//       status:        "delivered",
+//     });
+
+//     if (!order) {
+//       return res.status(404).json({ success: false, message: "Delivered order not found" });
+//     }
+
+//     // 24hr window check
+//     const invoice = await Invoice.findOne({
+//       buyerOrderId: order._id,
+//       invoiceType:  "buyer",
+//     });
+
+//     if (!invoice?.deliveredAt) {
+//       return res.status(400).json({ success: false, message: "Delivery info not found" });
+//     }
+
+//     const hoursPassed = (Date.now() - new Date(invoice.deliveredAt).getTime()) / (1000 * 60 * 60);
+//     if (hoursPassed > 24) {
+//       return res.status(400).json({ success: false, message: "Return window closed — only within 24 hours of delivery" });
+//     }
+
+//     // Existing return check
+//     const existing = await ReturnOrder.findOne({ buyerOrderId: order._id });
+//     if (existing) {
+//       return res.status(400).json({ success: false, message: "Return request already submitted for this order" });
+//     }
+
+//     // Upload images
+//     const imageUrls = [];
+//     if (req.files?.length) {
+//       const maxImages = Math.min(req.files.length, 3);
+//       for (let i = 0; i < maxImages; i++) {
+//         const url = await uploadToFirebase(
+//           req.files[i].buffer,
+//           req.files[i].originalname,
+//           `return-images/${req.branch._id}`
+//         );
+//         imageUrls.push(url);
+//       }
+//     }
+
+//     // Get delivery company from DeliveryOrder
+//     const deliveryOrder = await DeliveryOrder.findOne({ bulkOrderId: order.bulkOrderId });
+
+//     // Get supplier invoice for amounts
+//     const supplierInvoice = await Invoice.findOne({
+//       buyerOrderId: order._id,
+//       invoiceType:  "supplier",
+//     });
+
+//     // ─── Penalty % DB se fetch karo ──────────────────
+//     const commSettings  = await getCommissionSettings();
+//     const PENALTY_PCT   = commSettings.supplierPenalty / 100;  // e.g. 0.02
+//     const penaltyAmount = Math.round((supplierInvoice?.grandTotal || 0) * PENALTY_PCT * 100) / 100;
+
+//     const returnOrder = await ReturnOrder.create({
+//       buyerOrderId:     order._id,
+//       bulkOrderId:      order.bulkOrderId,
+//       buyerBranchId:    req.branch._id,
+//       supplierBranchId: invoice.supplierBranchId,
+//       invoiceId:        invoice._id,
+//       deliveryOrderId:  deliveryOrder?._id || null,
+//       deliveryCompanyId: deliveryOrder?.deliveryCompanyId || null,
+//       subject,
+//       description,
+//       images: imageUrls,
+//       orderGrandTotal:  invoice.grandTotal,
+//       orderRawAmount:   invoice.totalAmount,
+//       deliveryCharge:   invoice.deliveryAmount,
+//       commissionAmount: invoice.commissionAmount,
+//       penaltyAmount,
+//     });
+
+//     // BuyerOrder status update
+//     await BuyerOrder.findByIdAndUpdate(order._id, { status: "return_requested" });
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Return request submitted ✅",
+//       data: {
+//         returnOrderId: returnOrder._id,
+//         status:        returnOrder.status,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("submitReturn error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  BUYER — Get My Return Orders
+// //  GET /api/returns/buyer/my-returns
+// // ═══════════════════════════════════════════════════════
+// exports.getMyReturns = async (req, res) => {
+//   try {
+//     if (req.branch.accountType !== "Buyer") {
+//       return res.status(403).json({ success: false, message: "Only buyers can access this" });
+//     }
+
+//     const returns = await ReturnOrder.find({ buyerBranchId: req.branch._id })
+//       .populate("buyerOrderId",  "quantity status")
+//       .populate("invoiceId",     "invoiceNumber grandTotal")
+//       .populate({
+//         path: "bulkOrderId",
+//         select: "platformItemId countryId",
+//         populate: [
+//           { path: "platformItemId", select: "name image unit" },
+//           { path: "countryId", select: "name" },
+//         ],
+//       })
+//       .sort({ createdAt: -1 });
+
+//     res.json({ success: true, total: returns.length, data: returns });
+//   } catch (err) {
+//     console.error("getMyReturns error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  SUPPLIER — Get Return Requests
+// //  GET /api/returns/supplier/requests
+// // ═══════════════════════════════════════════════════════
+// exports.getSupplierReturns = async (req, res) => {
+//   try {
+//     if (req.branch.accountType !== "Supplier") {
+//       return res.status(403).json({ success: false, message: "Only suppliers can access this" });
+//     }
+
+//     const returns = await ReturnOrder.find({
+//       supplierBranchId: req.branch._id,
+//       status: { $in: ["pending", "supplier_accepted", "supplier_rejected"] },
+//     })
+//       .populate("buyerBranchId", "managerName companyName")
+//       .populate({
+//         path: "invoiceId",
+//         select: "invoiceNumber grandTotal totalAmount quantity unit pricePerUnit platformItemId countryId",
+//         populate: [
+//           { path: "platformItemId", select: "name image unit" },
+//           { path: "countryId", select: "name" },
+//         ],
+//       })
+//       .sort({ createdAt: -1 });
+
+//     res.json({ success: true, total: returns.length, data: returns });
+//   } catch (err) {
+//     console.error("getSupplierReturns error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  SUPPLIER — Respond to Return
+// //  PUT /api/returns/supplier/:returnId/respond
+// //  Body: { action: "accept" | "reject", note }
+// // ═══════════════════════════════════════════════════════
+// exports.supplierRespond = async (req, res) => {
+//   try {
+//     if (req.branch.accountType !== "Supplier") {
+//       return res.status(403).json({ success: false, message: "Only suppliers can respond" });
+//     }
+
+//     const { action, note } = req.body;
+//     if (!["accept", "reject"].includes(action)) {
+//       return res.status(400).json({ success: false, message: "action must be accept or reject" });
+//     }
+//     if (action === "reject" && !note) {
+//       return res.status(400).json({ success: false, message: "Rejection reason required" });
+//     }
+
+//     const returnOrder = await ReturnOrder.findOne({
+//       _id:              req.params.returnId,
+//       supplierBranchId: req.branch._id,
+//       status:           "pending",
+//     }).populate("invoiceId");
+
+//     if (!returnOrder) {
+//       return res.status(404).json({ success: false, message: "Return request not found" });
+//     }
+
+//     if (action === "reject") {
+//       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+//         status:              "supplier_rejected",
+//         supplierNote:        note || null,
+//         supplierRespondedAt: new Date(),
+//       });
+//       return res.json({ success: true, message: "Return rejected — sent to admin for review." });
+//     }
+
+//     // ─── Accept = supplier admits fault → auto-resolve immediately, no admin wait ───
+//     await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+//       supplierNote:        note || null,
+//       supplierRespondedAt: new Date(),
+//     });
+
+//     const result = await resolveSupplierGuilty(returnOrder, returnOrder.invoiceId, {
+//       resolvedBy: null, // supplier self-resolved, not an admin
+//       note:       note || "Supplier accepted fault (self-resolved)",
+//     });
+
+//     res.json({
+//       success: true,
+//       message: `Return accepted. Penalty QAR ${result.penaltyAmount} applied automatically.`,
+//       data: result,
+//     });
+//   } catch (err) {
+//     console.error("supplierRespond error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  ADMIN — Get All Return Orders
+// //  GET /api/returns/admin/all?status=pending
+// // ═══════════════════════════════════════════════════════
+// exports.adminGetReturns = async (req, res) => {
+//   try {
+//     const { status, page = 1, limit = 20 } = req.query;
+//     const filter = {};
+//     if (status) filter.status = status;
+
+//     const skip  = (Number(page) - 1) * Number(limit);
+//     const total = await ReturnOrder.countDocuments(filter);
+
+//     const returns = await ReturnOrder.find(filter)
+//       .populate("buyerBranchId",    "managerName companyName email")
+//       .populate("supplierBranchId", "managerName companyName email")
+//       .populate({
+//         path: "invoiceId",
+//         select: "invoiceNumber grandTotal totalAmount deliveryAmount commissionAmount quantity unit pricePerUnit platformItemId countryId",
+//         populate: [
+//           { path: "platformItemId", select: "name image unit" },
+//           { path: "countryId", select: "name" },
+//         ],
+//       })
+//       .populate("bulkOrderId",      "winningPrice totalQuantity")
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(Number(limit));
+
+//     res.json({
+//       success: true,
+//       total,
+//       page:  Number(page),
+//       pages: Math.ceil(total / Number(limit)),
+//       data:  returns,
+//     });
+//   } catch (err) {
+//     console.error("adminGetReturns error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  ADMIN — Resolve Return Order
+// //  PUT /api/returns/admin/:returnId/resolve
+// //  Body: { decision: "cancel" | "supplier_guilty" | "rider_guilty", note }
+// // ═══════════════════════════════════════════════════════
+// exports.adminResolve = async (req, res) => {
+//   try {
+//     const { decision, note } = req.body;
+
+//     if (!["cancel", "supplier_guilty", "rider_guilty"].includes(decision)) {
+//       return res.status(400).json({ success: false, message: "Invalid decision" });
+//     }
+
+//     const returnOrder = await ReturnOrder.findById(req.params.returnId)
+//       .populate("invoiceId");
+
+//     if (!returnOrder) {
+//       return res.status(404).json({ success: false, message: "Return order not found" });
+//     }
+
+//     if (returnOrder.status.startsWith("resolved_")) {
+//       return res.status(400).json({ success: false, message: "Already resolved" });
+//     }
+
+//     const invoice = returnOrder.invoiceId;
+//     const now     = new Date();
+
+//     // ─── CANCEL ─────────────────────────────────────────
+//     // Return request cancelled/dismissed — order stays exactly as it was (delivered).
+//     // No money movement, no status change to "returned".
+//     if (decision === "cancel") {
+//       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+//         status:         "resolved_cancelled",
+//         adminNote:      note || null,
+//         adminResolvedAt: now,
+//         resolvedBy:     req.admin._id,
+//       });
+
+//       // BuyerOrder wapas "delivered" — return cancel hui, koi return hua hi nahi
+//       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "delivered" });
+
+//       return res.json({ success: true, message: "Return request cancelled" });
+//     }
+
+//     // ─── SUPPLIER GUILTY ─────────────────────────────────
+//     if (decision === "supplier_guilty") {
+//       const result = await resolveSupplierGuilty(returnOrder, invoice, {
+//         resolvedBy: req.admin._id,
+//         note:       note || null,
+//       });
+
+//       return res.json({
+//         success: true,
+//         message: `Supplier guilty. Penalty QAR ${result.penaltyAmount} applied. Return delivery created.`,
+//         data: result,
+//       });
+//     }
+
+//     // ─── RIDER GUILTY ────────────────────────────────────
+//     if (decision === "rider_guilty") {
+   
+//       await Invoice.findByIdAndUpdate(invoice._id, {
+//         paymentStatus: "cancelled",
+//         returnReason:  "rider_guilty",
+//         amountDue:     0,
+//         refundAmount:  invoice.amountPaid || 0,
+//         amountPaid:    0,
+//       });
+      
+//       // 2. BuyerOrder → returned
+//       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
+
+//       // 3. Rider debt — single ledger debit, full grandTotal
+//       const debtAmount = Math.round((invoice.grandTotal || 0) * 100) / 100;
+
+//       await ledger.debitRider(
+//         returnOrder.deliveryCompanyId, debtAmount, "rider_guilty_debt",
+//         { invoiceId: invoice._id, bulkOrderId: returnOrder.bulkOrderId, buyerOrderId: returnOrder.buyerOrderId, returnOrderId: returnOrder._id },
+//         `Rider guilty debt — ${invoice.invoiceNumber}`
+//       );
+
+//       // 4. ReturnOrder update
+//       await ReturnOrder.findByIdAndUpdate(returnOrder._id, {
+//         status:            "resolved_rider_guilty",
+//         adminNote:         note || null,
+//         adminResolvedAt:   now,
+//         resolvedBy:        req.admin._id,
+//         riderDebtRecorded: true,
+//         riderDebtAmount:   debtAmount,
+//       });
+
+//       return res.json({
+//         success: true,
+//         message: `Rider guilty. Debt QAR ${debtAmount} recorded — will be offset against monthly rider earnings.`,
+//         data: { grandTotal: invoice.grandTotal, debtAmount },
+//       });
+//     }
+//   } catch (err) {
+//     console.error("adminResolve error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  DELIVERY — Return Delivery Actions
+// //  PUT /api/returns/delivery/:returnDeliveryId/pick
+// //  PUT /api/returns/delivery/:returnDeliveryId/complete
+// // ═══════════════════════════════════════════════════════
+// exports.pickReturnDelivery = async (req, res) => {
+//   try {
+//     const rd = await ReturnDelivery.findOne({
+//       _id:               req.params.returnDeliveryId,
+//       deliveryCompanyId: req.deliveryCompany._id,
+//       status:            "pending",
+//     });
+
+//     if (!rd) return res.status(404).json({ success: false, message: "Return delivery not found" });
+
+//     await ReturnDelivery.findByIdAndUpdate(rd._id, {
+//       status:   "picked",
+//       pickedAt: new Date(),
+//     });
+
+//     res.json({ success: true, message: "Return delivery picked ✅" });
+//   } catch (err) {
+//     console.error("pickReturnDelivery error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// exports.completeReturnDelivery = async (req, res) => {
+//   try {
+//     const rd = await ReturnDelivery.findOne({
+//       _id:               req.params.returnDeliveryId,
+//       deliveryCompanyId: req.deliveryCompany._id,
+//       status:            "picked",
+//     });
+
+//     if (!rd) return res.status(404).json({ success: false, message: "Return delivery not found" });
+
+//     await ReturnDelivery.findByIdAndUpdate(rd._id, {
+//       status:      "delivered_to_supplier",
+//       deliveredAt: new Date(),
+//     });
+
+//     // BuyerOrder final status
+//     const returnOrder = await ReturnOrder.findById(rd.returnOrderId);
+//     if (returnOrder) {
+//       await BuyerOrder.findByIdAndUpdate(returnOrder.buyerOrderId, { status: "returned" });
+//     }
+
+//     res.json({ success: true, message: "Return delivered to supplier ✅" });
+//   } catch (err) {
+//     console.error("completeReturnDelivery error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  ADMIN — Rider Debt Summary (monthly settlement)
+// //  GET /api/returns/admin/rider-debts
+// // ═══════════════════════════════════════════════════════
+// exports.getRiderDebts = async (req, res) => {
+//   try {
+//     const { settled, deliveryCompanyId } = req.query;
+//     const filter = {};
+//     if (settled !== undefined) filter.settled = settled === "true";
+//     if (deliveryCompanyId)     filter.deliveryCompanyId = deliveryCompanyId;
+
+//     const debts = await RiderDebt.find(filter)
+//       .populate("deliveryCompanyId", "name email phone")
+//       .populate("invoiceId",         "invoiceNumber grandTotal")
+//       .sort({ createdAt: -1 });
+
+//     // Summary per company
+//     const summary = {};
+//     debts.forEach(d => {
+//       const cid = d.deliveryCompanyId?._id?.toString();
+//       if (!summary[cid]) {
+//         summary[cid] = {
+//           company:        d.deliveryCompanyId,
+//           totalOwed:      0,
+//           totalRiderShare: 0,
+//           orderCount:     0,
+//           settled:        0,
+//           unsettled:      0,
+//         };
+//       }
+//       summary[cid].totalOwed       += d.netOwed;
+//       summary[cid].totalRiderShare += d.riderShare;
+//       summary[cid].orderCount++;
+//       if (d.settled) summary[cid].settled++;
+//       else           summary[cid].unsettled++;
+//     });
+
+//     res.json({
+//       success: true,
+//       total:   debts.length,
+//       summary: Object.values(summary),
+//       data:    debts,
+//     });
+//   } catch (err) {
+//     console.error("getRiderDebts error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  ADMIN — Mark Rider Debt Settled
+// //  PUT /api/returns/admin/rider-debts/:id/settle
+// // ═══════════════════════════════════════════════════════
+// exports.settleRiderDebt = async (req, res) => {
+//   try {
+//     const { note } = req.body;
+//     await RiderDebt.findByIdAndUpdate(req.params.id, {
+//       settled:   true,
+//       settledAt: new Date(),
+//       note:      note || null,
+//     });
+//     res.json({ success: true, message: "Rider debt marked as settled ✅" });
+//   } catch (err) {
+//     console.error("settleRiderDebt error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // ═══════════════════════════════════════════════════════
+// //  ADMIN — Supplier Debt Summary
+// //  GET /api/returns/admin/supplier-debts
+// // ═══════════════════════════════════════════════════════
+// exports.getSupplierDebts = async (req, res) => {
+//   try {
+//     const { settled } = req.query;
+//     const filter = {};
+//     if (settled !== undefined) filter.settled = settled === "true";
+
+//     const debts = await SupplierDebt.find(filter)
+//       .populate("supplierBranchId", "managerName companyName email")
+//       .populate("returnOrderId",    "subject status penaltyAmount")
+//       .sort({ createdAt: -1 });
+
+//     res.json({ success: true, total: debts.length, data: debts });
+//   } catch (err) {
+//     console.error("getSupplierDebts error:", err);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
