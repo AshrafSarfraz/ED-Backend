@@ -1,5 +1,4 @@
-// 📁 controllers/admin/buyerProfile.js
-// Buyer ka poora record — kitna order kiya, kitna deliver/return/cancel hua,
+
 // kitni purchase ki, kitna paid/due hai. Ek jagah, admin ke liye.
 const Branch      = require("../../models/Branch");
 const BuyerOrder  = require("../../models/buyer/buyerOrder");
