@@ -6,7 +6,9 @@ const bannerSchema = new mongoose.Schema(
     tag:      { type: String, required: true, trim: true },   // e.g. "Sponsored", "This Week"
     title:    { type: String, required: true, trim: true },   // e.g. "Boost Your\nBusiness With Us"
     subtitle: { type: String, trim: true, default: "" },      // e.g. "Reach 10,000+ buyers"
-    emoji:    { type: String, trim: true, default: "" },      // e.g. "🥕"
+    // ─── Image (pehle yahan emoji tha) ────────────────────
+    //  Firebase Storage ka URL — folder: banner-images/
+    image:    { type: String, default: null },
     bg:       { type: String, required: true, trim: true },   // hex color e.g. "#F15A21"
     waNumber: { type: String, required: true, trim: true },   // e.g. "97477876146"
     waText:   { type: String, required: true, trim: true },   // pre-filled whatsapp message
