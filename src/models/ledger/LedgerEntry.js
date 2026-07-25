@@ -1,10 +1,4 @@
-// 📁 models/ledger/LedgerEntry.js
-// ═══════════════════════════════════════════════════════
-//  IMMUTABLE ledger — har financial transaction (earning, penalty, debt, fee)
-//  ek entry ke roop mein yahan likhi jaati hai. Purani entry KABHI edit nahi hoti —
-//  sirf naye entries add hoti hain. Balance hamesha entries se LIVE calculate hota hai
-//  (kabhi kisi single field mein "cache" nahi hota) — isse ye bugs khatam ho jaate hain
-//  jahan alag-alag jagah alag-alag manual +/- math likhne se numbers mismatch ho jaate the.
+
 // ═══════════════════════════════════════════════════════
 const mongoose = require("mongoose");
 const { El_Distributor } = require("../../config/db");
