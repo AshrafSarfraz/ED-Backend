@@ -69,6 +69,16 @@ app.use("/api/app-config", require("./src/routes/AppConfig/banner"))
 app.use("/api/app-config", require("./src/routes/AppConfig/faq"))  
 app.use("/api/app-config", require("./src/routes/AppConfig/terms"))  
 
+// inventory Management 
+app.use('/api/menu', require('./src/InventoryManagement/routes/menu'));
+app.use('/api/billing', require('./src/InventoryManagement/routes/billing'));
+const usageRoute = require('./src/InventoryManagement/routes/UsageRoutes');
+app.use('/api/usage', usageRoute);
+
+
+
+
+
 app.get("/", (req, res) => res.send("✅ El Distributor API is running!"));
 
 // ─── 404 ──────────────────────────────────────────────────
