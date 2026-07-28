@@ -1,16 +1,17 @@
 const mongoose = require('mongoose');
 const { Inventory } = require('../../config/db');
-const { UNIT_LIST } = require('../utils/units');
+const { FAMILY_LIST } = require('../utils/units');
 
+// Ingredient master me sirf core naam hai: Water, Sugar, Oil, Chilli.
+// Cost yahan nahi. Unit bhi nahi - sirf family (Water -> volume),
+// taake recipe me koi galti se `water 200 g` na daal de.
 const ingredientSchema = new mongoose.Schema(
   {
     branch:   { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
     name:     { type: String, required: true, trim: true, maxlength: 120 },
-    nameKey:  { type: String, required: true }, // lowercase lookup key
-    unit:     { type: String, enum: UNIT_LIST, required: true },
+    nameKey:  { type: String, required: true },   // lowercase lookup key -> Water/WATER/water sab ek
+    family:   { type: String, enum: FAMILY_LIST, required: true },  // weight | volume | count
     category: { type: String, trim: true, maxlength: 60, default: '' },
-    // cost `unit` ke hisaab se (unit=kg -> QAR per kg)
-    costPerUnit: { type: Number, default: 0, min: 0 },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

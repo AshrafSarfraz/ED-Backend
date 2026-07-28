@@ -1,14 +1,13 @@
 const Invoice = require('../models/Invoice');
 const MenuItem = require('../models/MenuItem');
-const Ingredient = require('../models/Ingredient');
 const Counter = require('../models/Counter');
 const asyncHandler = require('../utils/asyncHandler');
-const { toBase, costPerBase, baseUnitOf, round } = require('../utils/units');
+const { toBase, baseUnitOf, round } = require('../utils/units');
 const S = require('../utils/sanitize');
 
 const TZ_OFFSET = Number(process.env.BUSINESS_TZ_OFFSET || 3); // Qatar = UTC+3
 
-/* GET /api/invoices?page=&limit=&from=&to=&search= */
+/* GET /api/invoices?page=&limit=&month=&from=&to=&search= */
 exports.list = asyncHandler(async (req, res) => {
   const { page, limit, skip } = S.paging(req.query);
   const query = { branch: req.branch._id, ...buildDateFilter(req.query) };
@@ -62,13 +61,8 @@ exports.create = asyncHandler(async (req, res) => {
   const menuDocs = await MenuItem.find({ _id: { $in: ids }, branch: req.branch._id }).lean();
   const menuById = new Map(menuDocs.map((m) => [String(m._id), m]));
 
-  /* ---- ingredient costs (snapshot ke liye) ---- */
-  const ingIds = [...new Set(menuDocs.flatMap((m) => m.recipe.map((r) => String(r.ingredient))))];
-  const ings = await Ingredient.find({ _id: { $in: ingIds }, branch: req.branch._id }).lean();
-  const ingById = new Map(ings.map((i) => [String(i._id), i]));
-
-  /* ---- build items ---- */
-  const merged = new Map(); // same menu item repeat ho to jodh do
+  /* ---- build items (same menu item repeat ho to jodh do) ---- */
+  const merged = new Map();
   for (const it of rawItems) {
     const id = S.str(it.menuItem);
     const qty = S.int(it.quantity);
@@ -77,28 +71,21 @@ exports.create = asyncHandler(async (req, res) => {
   }
 
   const items = [];
-  let ingredientCost = 0;
 
   for (const [id, quantity] of merged) {
     const m = menuById.get(id);
     if (!m) throw S.bad(`Menu item is branch me nahi mila: ${id}`);
     if (m.isActive === false) throw S.bad(`"${m.name}" ab available nahi hai`);
 
-    const recipe = m.recipe.map((r) => {
-      const ing = ingById.get(String(r.ingredient));
-      const baseQty = toBase(r.quantity, r.unit);
-      const cpb = ing ? costPerBase(ing.costPerUnit, ing.unit) : 0;
-      ingredientCost += baseQty * cpb * quantity;
-      return {
-        ingredient: r.ingredient,
-        name: r.name,
-        quantity: r.quantity,
-        unit: r.unit,
-        baseQuantity: round(baseQty, 4),
-        baseUnit: baseUnitOf(r.unit),
-        costPerBaseUnit: round(cpb, 6),
-      };
-    });
+    // recipe ka snapshot - baad me recipe badle to purani usage report nahi badlegi
+    const recipe = m.recipe.map((r) => ({
+      ingredient: r.ingredient,
+      name: r.name,
+      quantity: r.quantity,
+      unit: r.unit,
+      baseQuantity: round(toBase(r.quantity, r.unit), 4),
+      baseUnit: baseUnitOf(r.unit),
+    }));
 
     items.push({
       menuItem: m._id,
@@ -125,7 +112,6 @@ exports.create = asyncHandler(async (req, res) => {
     taxAmount,
     subtotal,
     totalAmount,
-    ingredientCost: round(ingredientCost, 3),
     createdBy: req.branch._id,
   });
 

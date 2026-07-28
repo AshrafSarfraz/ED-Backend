@@ -5,13 +5,12 @@ const { UNIT_LIST } = require('../utils/units');
 // Sale ke waqt ki recipe ka SNAPSHOT. Baad me recipe badle to purani report nahi badlegi.
 const snapLineSchema = new mongoose.Schema(
   {
-    ingredient:      { type: mongoose.Schema.Types.ObjectId, ref: 'Ingredient', required: true },
-    name:            { type: String, required: true },
-    quantity:        { type: Number, required: true, min: 0 },  // recipe line ki apni unit me
-    unit:            { type: String, enum: UNIT_LIST, required: true },
-    baseQuantity:    { type: Number, required: true, min: 0 },  // g / ml / pcs me
-    baseUnit:        { type: String, required: true },
-    costPerBaseUnit: { type: Number, default: 0, min: 0 },
+    ingredient:   { type: mongoose.Schema.Types.ObjectId, ref: 'Ingredient', required: true },
+    name:         { type: String, required: true },
+    quantity:     { type: Number, required: true, min: 0 },  // recipe line ki apni unit me
+    unit:         { type: String, enum: UNIT_LIST, required: true },
+    baseQuantity: { type: Number, required: true, min: 0 },  // g / ml / pcs me
+    baseUnit:     { type: String, required: true },
   },
   { _id: false }
 );
@@ -38,7 +37,6 @@ const invoiceSchema = new mongoose.Schema(
     taxAmount:     { type: Number, default: 0, min: 0 },
     subtotal:      { type: Number, required: true, min: 0 },
     totalAmount:   { type: Number, required: true, min: 0 },
-    ingredientCost:{ type: Number, default: 0, min: 0 },  // COGS estimate
     createdBy:     { type: mongoose.Schema.Types.ObjectId },
   },
   { timestamps: true }

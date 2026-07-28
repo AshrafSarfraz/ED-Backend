@@ -1,7 +1,7 @@
 const MenuItem = require('../models/MenuItem');
 const Ingredient = require('../models/Ingredient');
 const asyncHandler = require('../utils/asyncHandler');
-const { isValidUnit, sameFamily, toBase, costPerBase, round } = require('../utils/units');
+const { isValidUnit, unitInFamily, baseOfFamily, unitsOfFamily, round } = require('../utils/units');
 const S = require('../utils/sanitize');
 
 /* GET /api/menu-items?search=&category=&page=&limit= */
@@ -25,7 +25,7 @@ exports.list = asyncHandler(async (req, res) => {
   res.json({ items, total, page, limit, pages: Math.ceil(total / limit) });
 });
 
-/* GET /api/menu-items/:id  -> recipe + live cost breakdown */
+/* GET /api/menu-items/:id  -> recipe + jo ingredients delete ho gaye unki nishandehi */
 exports.getOne = asyncHandler(async (req, res) => {
   if (!S.isId(req.params.id)) throw S.bad('Invalid id');
 
@@ -33,26 +33,21 @@ exports.getOne = asyncHandler(async (req, res) => {
   if (!item) throw S.notFound('Menu item not found');
 
   const ids = item.recipe.map((r) => r.ingredient);
-  const ings = await Ingredient.find({ _id: { $in: ids }, branch: req.branch._id }).lean();
+  const ings = await Ingredient.find({ _id: { $in: ids }, branch: req.branch._id })
+    .select('name family category').lean();
   const byId = new Map(ings.map((i) => [String(i._id), i]));
 
-  let cost = 0;
   const recipe = item.recipe.map((r) => {
     const ing = byId.get(String(r.ingredient));
-    const base = toBase(r.quantity, r.unit);
-    const cpb = ing ? costPerBase(ing.costPerUnit, ing.unit) : 0;
-    const lineCost = round(base * cpb, 3);
-    cost += lineCost;
-    return { ...r, cost: lineCost, missing: !ing };
+    return {
+      ...r,
+      family: ing?.family || null,
+      category: ing?.category || '',
+      missing: !ing,   // ingredient master se delete ho gaya
+    };
   });
 
-  res.json({
-    ...item,
-    recipe,
-    ingredientCost: round(cost, 3),
-    margin: round(item.price - cost, 3),
-    marginPercent: item.price ? round(((item.price - cost) / item.price) * 100, 1) : 0,
-  });
+  res.json({ ...item, recipe });
 });
 
 /* POST /api/menu-items */
@@ -60,7 +55,7 @@ exports.create = asyncHandler(async (req, res) => {
   const data = await readBody(req);
 
   const dup = await MenuItem.findOne({ branch: req.branch._id, nameKey: data.nameKey }).lean();
-  if (dup) throw S.conflict(`Menu item "${data.name}" already exists`);
+  if (dup) throw S.conflict(`Menu item "${dup.name}" already exists`);
 
   const item = await MenuItem.create({ branch: req.branch._id, ...data });
   res.status(201).json(item);
@@ -80,7 +75,7 @@ exports.update = asyncHandler(async (req, res) => {
     nameKey: data.nameKey,
     _id: { $ne: item._id },
   }).lean();
-  if (dup) throw S.conflict(`Menu item "${data.name}" already exists`);
+  if (dup) throw S.conflict(`Menu item "${dup.name}" already exists`);
 
   item.set(data);
   await item.save();
@@ -147,11 +142,15 @@ async function readBody(req) {
       const qty = S.num(line.quantity);
       if (Number.isNaN(qty) || qty <= 0) throw S.bad(`"${ing.name}" ki quantity valid honi chahiye`);
 
-      // unit optional - na de to ingredient ki apni unit
-      const unit = S.str(line.unit).toLowerCase() || ing.unit;
+      // unit optional - na do to family ka base unit (volume -> ml)
+      const unit = S.str(line.unit).toLowerCase() || baseOfFamily(ing.family);
       if (!isValidUnit(unit)) throw S.bad(`Invalid unit "${line.unit}" for "${ing.name}"`);
-      if (!sameFamily(unit, ing.unit)) {
-        throw S.bad(`"${ing.name}" ${ing.unit} me track hota hai - "${unit}" use nahi kar sakte`);
+
+      // yahi wo guard hai jo `water 200 g` rokta hai
+      if (!unitInFamily(unit, ing.family)) {
+        throw S.bad(
+          `"${ing.name}" ${ing.family} hai - "${unit}" use nahi kar sakte. Allowed: ${unitsOfFamily(ing.family).join(', ')}`
+        );
       }
 
       recipe.push({ ingredient: ing._id, name: ing.name, quantity: qty, unit });

@@ -2,7 +2,7 @@ const Ingredient = require('../models/Ingredient');
 const MenuItem = require('../models/MenuItem');
 const asyncHandler = require('../utils/asyncHandler');
 const { parseCsv, headerMap, pick } = require('../utils/csv');
-const { UNIT_LIST, isValidUnit, familyOf, round } = require('../utils/units');
+const { FAMILY_LIST, isValidFamily, familyFromUnit, unitsOfFamily } = require('../utils/units');
 const S = require('../utils/sanitize');
 
 const MAX_ROWS = 5000;
@@ -20,6 +20,12 @@ exports.list = asyncHandler(async (req, res) => {
   const category = S.str(req.query.category);
   if (category) query.category = category;
 
+  const family = S.str(req.query.family);
+  if (family) {
+    if (!isValidFamily(family)) throw S.bad(`Invalid family "${family}". Allowed: ${FAMILY_LIST.join(', ')}`);
+    query.family = family;
+  }
+
   if (S.str(req.query.active) === 'true') query.isActive = true;
 
   const [items, total] = await Promise.all([
@@ -27,7 +33,14 @@ exports.list = asyncHandler(async (req, res) => {
     Ingredient.countDocuments(query),
   ]);
 
-  res.json({ items, total, page, limit, pages: Math.ceil(total / limit) });
+  // frontend ko batado is family me kaunse units chalenge
+  res.json({
+    items: items.map((i) => ({ ...i, units: unitsOfFamily(i.family) })),
+    total,
+    page,
+    limit,
+    pages: Math.ceil(total / limit),
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -37,10 +50,10 @@ exports.create = asyncHandler(async (req, res) => {
   const data = readBody(req.body);
 
   const dup = await Ingredient.findOne({ branch: req.branch._id, nameKey: data.nameKey }).lean();
-  if (dup) throw S.conflict(`Ingredient "${data.name}" already exists`);
+  if (dup) throw S.conflict(`Ingredient "${dup.name}" already exists`);
 
   const doc = await Ingredient.create({ branch: req.branch._id, ...data });
-  res.status(201).json(doc);
+  res.status(201).json({ ...doc.toObject(), units: unitsOfFamily(doc.family) });
 });
 
 /* ------------------------------------------------------------------ */
@@ -54,15 +67,16 @@ exports.update = asyncHandler(async (req, res) => {
 
   const data = readBody(req.body);
 
-  // unit family badal raha hai aur ingredient recipes me use ho raha hai -> block
-  if (familyOf(data.unit) !== familyOf(existing.unit)) {
+  // family badal raha hai aur ingredient recipes me use ho raha hai -> block.
+  // warna `water 200 ml` aur `water 200 g` mil kar ghalat total banate hain.
+  if (data.family !== existing.family) {
     const used = await MenuItem.countDocuments({
       branch: req.branch._id,
       'recipe.ingredient': existing._id,
     });
     if (used > 0) {
       throw S.conflict(
-        `Unit "${existing.unit}" se "${data.unit}" nahi ho sakta - ye ingredient ${used} menu item(s) me use ho raha hai`,
+        `"${existing.name}" ${used} menu item(s) me use ho raha hai - family "${existing.family}" se "${data.family}" nahi ho sakti. Pehle un recipes se hatao.`,
         { menuItemsAffected: used }
       );
     }
@@ -73,19 +87,19 @@ exports.update = asyncHandler(async (req, res) => {
     nameKey: data.nameKey,
     _id: { $ne: existing._id },
   }).lean();
-  if (dup) throw S.conflict(`Ingredient "${data.name}" already exists`);
+  if (dup) throw S.conflict(`Ingredient "${dup.name}" already exists`);
 
   existing.set(data);
   await existing.save();
 
-  // naam ya unit badla -> menu recipes ka denormalized naam sync kar do
+  // naam badla -> menu recipes ka denormalized naam sync kar do
   await MenuItem.updateMany(
     { branch: req.branch._id, 'recipe.ingredient': existing._id },
     { $set: { 'recipe.$[el].name': existing.name } },
     { arrayFilters: [{ 'el.ingredient': existing._id }] }
   );
 
-  res.json(existing);
+  res.json({ ...existing.toObject(), units: unitsOfFamily(existing.family) });
 });
 
 /* ------------------------------------------------------------------ */
@@ -158,7 +172,7 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
   const familyChanged = [];
   for (const [key, data] of parsed) {
     const prev = existingByKey.get(key);
-    if (prev && familyOf(prev.unit) !== familyOf(data.unit)) familyChanged.push({ prev, data });
+    if (prev && prev.family !== data.family) familyChanged.push({ prev, data });
   }
 
   /* ---- 3. safety check: recipes toot to nahi rahi ---- */
@@ -181,7 +195,7 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
             ingredients: m.recipe.filter((r) => idSet.has(String(r.ingredient))).map((r) => r.name),
           })),
           willDelete: toDelete.map((d) => d.name),
-          unitFamilyChanged: familyChanged.map((f) => `${f.prev.name}: ${f.prev.unit} -> ${f.data.unit}`),
+          unitFamilyChanged: familyChanged.map((f) => `${f.prev.name}: ${f.prev.family} -> ${f.data.family}`),
         }
       );
     }
@@ -191,7 +205,12 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
   const ops = [...parsed.values()].map((data) => ({
     updateOne: {
       filter: { branch: req.branch._id, nameKey: data.nameKey },
-      update: { $set: { ...data, branch: req.branch._id } },
+      // isActive ko chhora nahi ja raha - CSV me wo column nahi hota, is liye
+      // upload deactivated ingredient ko chupke se active na kare
+      update: {
+        $set: { name: data.name, family: data.family, category: data.category, branch: req.branch._id },
+        $setOnInsert: { isActive: true },
+      },
       upsert: true,
     },
   }));
@@ -224,11 +243,12 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 exports.template = (req, res) => {
   const csv =
-    'name,unit,category,costPerUnit\n' +
-    'Chicken Breast,kg,Meat,18.5\n' +
-    'Mozzarella Cheese,kg,Dairy,26\n' +
-    'Fresh Milk,litre,Dairy,4.25\n' +
-    'Burger Bun,pcs,Bakery,0.75\n';
+    'name,family,category\n' +
+    'Water,volume,Liquids\n' +
+    'Sugar,weight,Dry Goods\n' +
+    'Oil,volume,Liquids\n' +
+    'Chilli,weight,Spices\n' +
+    'Burger Bun,count,Bakery\n';
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="ingredients-template.csv"');
   res.send(csv);
@@ -244,18 +264,21 @@ function readBody(src = {}) {
   if (!name) throw S.bad('name required');
   if (name.length > 120) throw S.bad(`name bohat lamba: "${name.slice(0, 30)}..."`);
 
-  const unit = S.str(src.unit).toLowerCase();
-  if (!isValidUnit(unit)) throw S.bad(`Invalid unit "${src.unit}". Allowed: ${UNIT_LIST.join(', ')}`);
+  // family seedhi bhejo, ya purane data ke liye `unit` se nikal lo (kg -> weight)
+  let family = S.str(src.family).toLowerCase();
+  if (!family && src.unit !== undefined) family = familyFromUnit(src.unit) || '';
 
-  let cost = src.costPerUnit === undefined || src.costPerUnit === '' ? 0 : S.num(src.costPerUnit);
-  if (Number.isNaN(cost) || cost < 0) throw S.bad(`Invalid costPerUnit for "${name}"`);
+  if (!isValidFamily(family)) {
+    throw S.bad(
+      `"${name}" ki family invalid hai${src.family ? ` ("${src.family}")` : ''}. Allowed: ${FAMILY_LIST.join(', ')}`
+    );
+  }
 
   return {
     name,
     nameKey: S.nameKey(name),
-    unit,
+    family,
     category: S.str(src.category).slice(0, 60),
-    costPerUnit: round(cost, 4),
     isActive: src.isActive === undefined ? true : S.bool(src.isActive),
   };
 }
@@ -276,12 +299,14 @@ function extractRows(req) {
 
   const map = headerMap(grid[0]);
   if (!('name' in map)) throw S.bad('CSV me `name` column zaroori hai');
-  if (!('unit' in map)) throw S.bad('CSV me `unit` column zaroori hai');
+  if (!('family' in map) && !('unit' in map)) {
+    throw S.bad('CSV me `family` column zaroori hai (weight / volume / count)');
+  }
 
   return grid.slice(1).map((row) => ({
     name: pick(map, row, 'name', 'ingredient', 'ingredientname'),
-    unit: pick(map, row, 'unit', 'uom'),
-    category: pick(map, row, 'category', 'type', 'group'),
-    costPerUnit: pick(map, row, 'costPerUnit', 'cost', 'price', 'rate'),
+    family: pick(map, row, 'family', 'unitfamily', 'unittype', 'measure'),
+    unit: pick(map, row, 'unit', 'uom'),           // legacy fallback
+    category: pick(map, row, 'category', 'group'),
   }));
 }
