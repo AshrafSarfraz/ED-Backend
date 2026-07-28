@@ -2,7 +2,7 @@ const Ingredient = require('../models/Ingredient');
 const MenuItem = require('../models/MenuItem');
 const asyncHandler = require('../utils/asyncHandler');
 const { parseCsv, headerMap, pick } = require('../utils/csv');
-const { FAMILY_LIST, isValidFamily, familyFromUnit, unitsOfFamily } = require('../utils/units');
+const { UNIT_LIST, isValidUnit, familyOf, unitsOfFamily } = require('../utils/units');
 const S = require('../utils/sanitize');
 
 const MAX_ROWS = 5000;
@@ -20,10 +20,10 @@ exports.list = asyncHandler(async (req, res) => {
   const category = S.str(req.query.category);
   if (category) query.category = category;
 
-  const family = S.str(req.query.family);
-  if (family) {
-    if (!isValidFamily(family)) throw S.bad(`Invalid family "${family}". Allowed: ${FAMILY_LIST.join(', ')}`);
-    query.family = family;
+  const unit = S.str(req.query.unit).toLowerCase();
+  if (unit) {
+    if (!isValidUnit(unit)) throw S.bad(`Invalid unit "${unit}". Allowed: ${UNIT_LIST.join(', ')}`);
+    query.unit = unit;
   }
 
   if (S.str(req.query.active) === 'true') query.isActive = true;
@@ -33,9 +33,9 @@ exports.list = asyncHandler(async (req, res) => {
     Ingredient.countDocuments(query),
   ]);
 
-  // frontend ko batado is family me kaunse units chalenge
+  // frontend ko batado recipe me is ingredient ke liye kaunse units chalenge
   res.json({
-    items: items.map((i) => ({ ...i, units: unitsOfFamily(i.family) })),
+    items: items.map((i) => ({ ...i, units: unitsOfFamily(familyOf(i.unit)) })),
     total,
     page,
     limit,
@@ -53,7 +53,7 @@ exports.create = asyncHandler(async (req, res) => {
   if (dup) throw S.conflict(`Ingredient "${dup.name}" already exists`);
 
   const doc = await Ingredient.create({ branch: req.branch._id, ...data });
-  res.status(201).json({ ...doc.toObject(), units: unitsOfFamily(doc.family) });
+  res.status(201).json({ ...doc.toObject(), units: unitsOfFamily(familyOf(doc.unit)) });
 });
 
 /* ------------------------------------------------------------------ */
@@ -67,16 +67,17 @@ exports.update = asyncHandler(async (req, res) => {
 
   const data = readBody(req.body);
 
-  // family badal raha hai aur ingredient recipes me use ho raha hai -> block.
+  // unit family badal rahi hai aur ingredient recipes me use ho raha hai -> block.
   // warna `water 200 ml` aur `water 200 g` mil kar ghalat total banate hain.
-  if (data.family !== existing.family) {
+  // (ml -> litre chalega, ml -> g nahi)
+  if (familyOf(data.unit) !== familyOf(existing.unit)) {
     const used = await MenuItem.countDocuments({
       branch: req.branch._id,
       'recipe.ingredient': existing._id,
     });
     if (used > 0) {
       throw S.conflict(
-        `"${existing.name}" ${used} menu item(s) me use ho raha hai - family "${existing.family}" se "${data.family}" nahi ho sakti. Pehle un recipes se hatao.`,
+        `"${existing.name}" ${used} menu item(s) me use ho raha hai - "${existing.unit}" se "${data.unit}" nahi ho sakta. Pehle un recipes se hatao.`,
         { menuItemsAffected: used }
       );
     }
@@ -99,7 +100,7 @@ exports.update = asyncHandler(async (req, res) => {
     { arrayFilters: [{ 'el.ingredient': existing._id }] }
   );
 
-  res.json({ ...existing.toObject(), units: unitsOfFamily(existing.family) });
+  res.json({ ...existing.toObject(), units: unitsOfFamily(familyOf(existing.unit)) });
 });
 
 /* ------------------------------------------------------------------ */
@@ -172,7 +173,7 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
   const familyChanged = [];
   for (const [key, data] of parsed) {
     const prev = existingByKey.get(key);
-    if (prev && prev.family !== data.family) familyChanged.push({ prev, data });
+    if (prev && familyOf(prev.unit) !== familyOf(data.unit)) familyChanged.push({ prev, data });
   }
 
   /* ---- 3. safety check: recipes toot to nahi rahi ---- */
@@ -195,7 +196,7 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
             ingredients: m.recipe.filter((r) => idSet.has(String(r.ingredient))).map((r) => r.name),
           })),
           willDelete: toDelete.map((d) => d.name),
-          unitFamilyChanged: familyChanged.map((f) => `${f.prev.name}: ${f.prev.family} -> ${f.data.family}`),
+          unitFamilyChanged: familyChanged.map((f) => `${f.prev.name}: ${f.prev.unit} -> ${f.data.unit}`),
         }
       );
     }
@@ -208,7 +209,7 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
       // isActive ko chhora nahi ja raha - CSV me wo column nahi hota, is liye
       // upload deactivated ingredient ko chupke se active na kare
       update: {
-        $set: { name: data.name, family: data.family, category: data.category, branch: req.branch._id },
+        $set: { name: data.name, unit: data.unit, category: data.category, branch: req.branch._id },
         $setOnInsert: { isActive: true },
       },
       upsert: true,
@@ -243,12 +244,12 @@ exports.bulkUpload = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 exports.template = (req, res) => {
   const csv =
-    'name,family,category\n' +
-    'Water,volume,Liquids\n' +
-    'Sugar,weight,Dry Goods\n' +
-    'Oil,volume,Liquids\n' +
-    'Chilli,weight,Spices\n' +
-    'Burger Bun,count,Bakery\n';
+    'name,unit,category\n' +
+    'Water,ml,Liquids\n' +
+    'Chicken,g,Meat\n' +
+    'Chilli,g,Spices\n' +
+    'Oil,ml,Liquids\n' +
+    'Burger Bun,pcs,Bakery\n';
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="ingredients-template.csv"');
   res.send(csv);
@@ -264,20 +265,15 @@ function readBody(src = {}) {
   if (!name) throw S.bad('name required');
   if (name.length > 120) throw S.bad(`name bohat lamba: "${name.slice(0, 30)}..."`);
 
-  // family seedhi bhejo, ya purane data ke liye `unit` se nikal lo (kg -> weight)
-  let family = S.str(src.family).toLowerCase();
-  if (!family && src.unit !== undefined) family = familyFromUnit(src.unit) || '';
-
-  if (!isValidFamily(family)) {
-    throw S.bad(
-      `"${name}" ki family invalid hai${src.family ? ` ("${src.family}")` : ''}. Allowed: ${FAMILY_LIST.join(', ')}`
-    );
+  const unit = S.str(src.unit).toLowerCase();
+  if (!isValidUnit(unit)) {
+    throw S.bad(`"${name}" ki unit invalid hai${src.unit ? ` ("${src.unit}")` : ''}. Allowed: ${UNIT_LIST.join(', ')}`);
   }
 
   return {
     name,
     nameKey: S.nameKey(name),
-    family,
+    unit,
     category: S.str(src.category).slice(0, 60),
     isActive: src.isActive === undefined ? true : S.bool(src.isActive),
   };
@@ -299,14 +295,11 @@ function extractRows(req) {
 
   const map = headerMap(grid[0]);
   if (!('name' in map)) throw S.bad('CSV me `name` column zaroori hai');
-  if (!('family' in map) && !('unit' in map)) {
-    throw S.bad('CSV me `family` column zaroori hai (weight / volume / count)');
-  }
+  if (!('unit' in map)) throw S.bad(`CSV me \`unit\` column zaroori hai (${UNIT_LIST.join(' / ')})`);
 
   return grid.slice(1).map((row) => ({
     name: pick(map, row, 'name', 'ingredient', 'ingredientname'),
-    family: pick(map, row, 'family', 'unitfamily', 'unittype', 'measure'),
-    unit: pick(map, row, 'unit', 'uom'),           // legacy fallback
-    category: pick(map, row, 'category', 'group'),
+    unit: pick(map, row, 'unit', 'uom', 'measure'),
+    category: pick(map, row, 'category', 'group', 'type'),
   }));
 }

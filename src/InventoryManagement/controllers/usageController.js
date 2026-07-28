@@ -83,7 +83,7 @@ exports.report = asyncHandler(async (req, res) => {
   /* ---- master se latest naam/category ---- */
   const ids = [...new Set([...usage.values()].map((b) => b.id))].filter(S.isId);
   const ings = await Ingredient.find({ _id: { $in: ids }, branch: req.branch._id })
-    .select('name category family').lean();
+    .select('name category unit').lean();
   const ingById = new Map(ings.map((i) => [String(i._id), i]));
 
   const ingredients = [...usage.values()]
@@ -94,7 +94,7 @@ exports.report = asyncHandler(async (req, res) => {
         ingredient: b.ingredient,
         name: master?.name || b.name,
         category: master?.category || '',
-        family: master?.family || null,
+        trackedUnit: master?.unit || null,
         quantity: h.quantity,
         unit: h.unit,
         baseQuantity: round(b.baseQuantity, 3),

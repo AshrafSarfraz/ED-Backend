@@ -1,7 +1,7 @@
 const MenuItem = require('../models/MenuItem');
 const Ingredient = require('../models/Ingredient');
 const asyncHandler = require('../utils/asyncHandler');
-const { isValidUnit, unitInFamily, baseOfFamily, unitsOfFamily, round } = require('../utils/units');
+const { isValidUnit, sameFamily, familyOf, unitsOfFamily, round } = require('../utils/units');
 const S = require('../utils/sanitize');
 
 /* GET /api/menu-items?search=&category=&page=&limit= */
@@ -34,14 +34,14 @@ exports.getOne = asyncHandler(async (req, res) => {
 
   const ids = item.recipe.map((r) => r.ingredient);
   const ings = await Ingredient.find({ _id: { $in: ids }, branch: req.branch._id })
-    .select('name family category').lean();
+    .select('name unit category').lean();
   const byId = new Map(ings.map((i) => [String(i._id), i]));
 
   const recipe = item.recipe.map((r) => {
     const ing = byId.get(String(r.ingredient));
     return {
       ...r,
-      family: ing?.family || null,
+      trackedUnit: ing?.unit || null,
       category: ing?.category || '',
       missing: !ing,   // ingredient master se delete ho gaya
     };
@@ -142,14 +142,14 @@ async function readBody(req) {
       const qty = S.num(line.quantity);
       if (Number.isNaN(qty) || qty <= 0) throw S.bad(`"${ing.name}" ki quantity valid honi chahiye`);
 
-      // unit optional - na do to family ka base unit (volume -> ml)
-      const unit = S.str(line.unit).toLowerCase() || baseOfFamily(ing.family);
+      // unit optional - na do to ingredient ki apni unit (Water -> ml)
+      const unit = S.str(line.unit).toLowerCase() || ing.unit;
       if (!isValidUnit(unit)) throw S.bad(`Invalid unit "${line.unit}" for "${ing.name}"`);
 
-      // yahi wo guard hai jo `water 200 g` rokta hai
-      if (!unitInFamily(unit, ing.family)) {
+      // yahi wo guard hai jo `water 200 g` rokta hai (ml -> litre chalega)
+      if (!sameFamily(unit, ing.unit)) {
         throw S.bad(
-          `"${ing.name}" ${ing.family} hai - "${unit}" use nahi kar sakte. Allowed: ${unitsOfFamily(ing.family).join(', ')}`
+          `"${ing.name}" ${ing.unit} me hai - "${unit}" use nahi kar sakte. Allowed: ${unitsOfFamily(familyOf(ing.unit)).join(', ')}`
         );
       }
 
