@@ -70,10 +70,10 @@ app.use("/api/app-config", require("./src/routes/AppConfig/faq"))
 app.use("/api/app-config", require("./src/routes/AppConfig/terms"))  
 
 // inventory Management 
-app.use('/api/menu', require('./src/InventoryManagement/routes/menu'));
-app.use('/api/billing', require('./src/InventoryManagement/routes/billing'));
-const usageRoute = require('./src/InventoryManagement/routes/UsageRoutes');
-app.use('/api/usage', usageRoute);
+app.use('/ingredients', require('./src/InventoryManagement/routes/ingredientRoutes'));
+app.use('/menu-items', require('./src/InventoryManagement/routes/menuItemRoutes'));
+app.use('/invoices', require('./src/InventoryManagement/routes/invoiceRoutes'));
+app.use('/usage', require('./src/InventoryManagement/routes/usageRoutes'));
 
 
 
