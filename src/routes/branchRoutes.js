@@ -1,9 +1,8 @@
 const express = require("express");
 const router  = express.Router();
-const multer  = require("multer");
-
-// Multer — memory storage (Firebase pe direct upload)
-const upload = multer({ storage: multer.memoryStorage() });
+// Shared upload rules (config/uploadRules.js) — contract/PDC PDF ya image, max 10MB
+const { uploadDocument } = require("../middleware/multer");
+const upload = uploadDocument;
 
 const {
   addBranch,

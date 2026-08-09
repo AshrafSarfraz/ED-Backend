@@ -14,7 +14,9 @@ const {
   getCompanyBranches,
 } = require("../controllers/createCompany");
 
-const upload = require("../middleware/multer");
+// Company documents (trade license / QID) PDF bhi ho sakte hain → uploadDocument
+const { uploadDocument } = require("../middleware/multer");
+const upload = uploadDocument;
 const { protectCompany } = require("../middleware/protectCompany");
 const { adminOnly, protectAdmin } = require("../middleware/protectAdmin");
 

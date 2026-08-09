@@ -612,12 +612,16 @@ const sendBranchForgotPasswordEmail = async ({ toEmail, managerName, tempPasswor
 //  Winner cron ke END me call hote hain. Buyer ke 10 orders ho to bhi
 //  max 2 email jaati hain: ek won ki list, ek cancelled ki list.
 
-const sendOrdersWonSummaryEmail = async ({ toEmail, managerName, orders }) => {
+//  billNumber — us din ka BILL-B-… (buyer bill). Optional: null ho to email
+//  pehle jaisa hi bina bill header ke chala jayega.
+const sendOrdersWonSummaryEmail = async ({ toEmail, managerName, orders, billNumber = null }) => {
   const grandTotal = Math.round(orders.reduce((s, o) => s + (o.totalAmount || 0), 0) * 100) / 100;
+  const issueDate  = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 
   const rows = orders.map((o, i) => `
     <tr style="background:${i % 2 ? "#FFFFFF" : "#F9F9F9"};">
       <td style="padding:10px 12px;color:#000000;">
+        <span style="font-family:monospace;font-size:11px;color:#F15A21;">${o.invoiceNumber || "-"}</span><br />
         <strong>${o.itemName || "-"}</strong><br />
         <span style="color:#888;font-size:12px;">${o.country || "-"}</span>
       </td>
@@ -627,9 +631,27 @@ const sendOrdersWonSummaryEmail = async ({ toEmail, managerName, orders }) => {
     </tr>
   `).join("");
 
+  // ─── Bill header — is bill number pe aage outstanding statement bhi jaayega ───
+  const billHeader = billNumber ? `
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #F15A21;border-radius:8px;">
+      <tr>
+        <td style="padding:14px 16px;background:#F9F9F9;">
+          <span style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Bill Invoice No.</span><br />
+          <span style="font-family:monospace;font-size:16px;font-weight:bold;color:#F15A21;">${billNumber}</span>
+        </td>
+        <td style="padding:14px 16px;background:#F9F9F9;text-align:right;">
+          <span style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Bill Date</span><br />
+          <span style="font-size:14px;font-weight:bold;color:#000000;">${issueDate}</span>
+        </td>
+      </tr>
+    </table>
+  ` : "";
+
   await sendMail({
     to: toEmail,
-    subject: `${orders.length} Order${orders.length > 1 ? "s" : ""} Placed Successfully — EL Distributor`,
+    subject: billNumber
+      ? `Bill ${billNumber} — ${orders.length} Order${orders.length > 1 ? "s" : ""} Placed — EL Distributor`
+      : `${orders.length} Order${orders.length > 1 ? "s" : ""} Placed Successfully — EL Distributor`,
     html: emailWrapper(`
       <h2 style="color:#F15A21;margin-top:0;">Orders Placed Successfully</h2>
       <p style="color:#000000;font-size:15px;">Dear <strong>${managerName}</strong>,</p>
@@ -637,7 +659,8 @@ const sendOrdersWonSummaryEmail = async ({ toEmail, managerName, orders }) => {
         Suppliers have been found for <strong>${orders.length}</strong>
         of your order${orders.length > 1 ? "s" : ""}. Here is the summary:
       </p>
-      ${summaryTable(["Item", "Quantity", "Unit Price", "Total"], rows)}
+      ${billHeader}
+      ${summaryTable(["Invoice No. / Item", "Quantity", "Unit Price", "Total"], rows)}
       ${infoBox(`
         <p style="margin:0;font-size:16px;color:#000000;">
           <strong>Grand Total:</strong>
@@ -647,6 +670,11 @@ const sendOrdersWonSummaryEmail = async ({ toEmail, managerName, orders }) => {
       <p style="color:#000000;font-size:15px;">
         Your orders are now being processed. You will be notified once they are delivered.
       </p>
+      ${billNumber ? `
+        <p style="color:#888;font-size:12px;">
+          Please quote <strong style="color:#F15A21;font-family:monospace;">${billNumber}</strong>
+          in all payments and correspondence related to these orders.
+        </p>` : ""}
     `),
   });
 };

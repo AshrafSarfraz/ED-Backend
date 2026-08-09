@@ -242,7 +242,7 @@ exports.getDayBulkOrders = async (req, res) => {
 // ═══════════════════════════════════════════════════════
 exports.paySupplier = async (req, res) => {
   try {
-    const { bulkOrderId, date, note, transactionRef } = req.body;
+    const { bulkOrderId, date, branchId, note, transactionRef } = req.body;
     if (!bulkOrderId && !date) {
       return res.status(400).json({ success: false, message: "bulkOrderId or date required" });
     }
@@ -250,6 +250,28 @@ exports.paySupplier = async (req, res) => {
     let entityIds = [];
     let commonOpts = { note, transactionRef, paidBy: req.admin._id };
     const payouts = [];
+
+    // ─── NEW: date + branchId → sirf EK supplier ka us din ka payment release ───
+    //  (Supplier detail screen ka "Release Payment" button)
+    //  branchId na ho to purana behaviour bilkul waisa hi rehta hai.
+    if (date && branchId) {
+      const start = new Date(date); start.setHours(0, 0, 0, 0);
+      const end   = new Date(date); end.setHours(23, 59, 59, 999);
+      const result = await ledger.settleAndPayout({
+        entityType: "supplier", entityId: branchId, start, end, ...commonOpts,
+      });
+      if (!result) {
+        return res.status(400).json({ success: false, message: "No pending payments for this supplier on this date" });
+      }
+      return res.json({
+        success: true,
+        message: `✅ Payment released to supplier.`,
+        data: {
+          invoiceCount: result.entryCount, totalPaid: result.netAmount, paidAt: new Date(),
+          note: note || null, transactionRef: transactionRef || null,
+        },
+      });
+    }
 
     if (bulkOrderId) {
       entityIds = await ledger.getUnsettledEntityIds("supplier", {});

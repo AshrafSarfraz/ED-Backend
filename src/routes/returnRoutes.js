@@ -1,8 +1,8 @@
 // 📁 routes/returnRoutes.js
 const express = require("express");
 const router  = express.Router();
-const multer  = require("multer");
-const upload  = multer({ storage: multer.memoryStorage() });
+// Shared upload rules — return photos, max 5MB each
+const upload = require("../middleware/multer");
 
 const {
   submitReturn,

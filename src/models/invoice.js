@@ -15,6 +15,13 @@ const invoiceSchema = new mongoose.Schema(
     invoiceType:   { type: String, enum: ["buyer", "supplier"], default: "buyer" },
     invoiceStatus: { type: String, enum: ["final"], default: "final" },
 
+    // ─── Bill invoice link ─────────────────────────────
+    // Ye item invoice kis din ke bill ka hissa hai.
+    // Bidding cron ke baad billService stamp karta hai.
+    // Purane invoices pe null rahega — koi migration zaroori nahi.
+    billInvoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "BillInvoice", default: null },
+    billNumber:    { type: String, default: null },
+
     quantity:     { type: Number, required: true },
     unit:         { type: String, required: true },
     pricePerUnit: { type: Number, required: true },

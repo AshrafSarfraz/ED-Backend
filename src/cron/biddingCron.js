@@ -472,6 +472,7 @@ const Branch       = require("../models/Branch");
 const { getBiddingSettings } = require("./settingService");
 const { getCommissionSettings } = require("./commissionSettingService");
 const ledger = require("../services/ledgerService");
+const { generateDailyBills } = require("../services/billService");
 const {
   sendOrdersWonSummaryEmail,
   sendOrdersCancelledSummaryEmail,
@@ -570,7 +571,9 @@ const pushToDigest = (digest, branch, bucket, row) => {
   digest.get(key)[bucket].push(row);
 };
 
-const flushDigest = async (digest) => {
+//  billMap: Map<branchIdStr, billNumber> — won email me BILL-B-… dikhane ke liye.
+//  Missing ho to email pehle jaisa hi jaata hai, sirf bill number nahi hoga.
+const flushDigest = async (digest, billMap = new Map()) => {
   if (digest.size === 0) return;   // kuch process nahi hua — chup raho
 
   for (const d of digest.values()) {
@@ -579,6 +582,7 @@ const flushDigest = async (digest) => {
       try {
         await sendOrdersWonSummaryEmail({
           toEmail: d.email, managerName: d.managerName, orders: d.won,
+          billNumber: billMap.get(String(d.branchId)) || null,
         });
       } catch (err) {
         console.error(`Won email failed for ${d.email}:`, err.message);
@@ -1025,6 +1029,7 @@ const runWinnerSelect = async (settings) => {
         }
 
         pushToDigest(buyerDigest, bo.buyerBranchId, "won", {
+          invoiceNumber: buyerInvNum,
           itemName:     platformItem?.name,
           country:      country?.name,
           quantity:     bo.quantity,
@@ -1046,10 +1051,25 @@ const runWinnerSelect = async (settings) => {
   } catch (err) {
     console.error("Winner Cron error:", err);
   } finally {
+    // ─── BILL INVOICES — aaj ke saare item invoices ka header bill ───
+    //  Emails se PEHLE chalta hai taake won email me BILL-B-… number aa sake.
+    //  generateDailyBills khud kabhi throw nahi karti — fail ho to bills
+    //  Map khaali aayega aur email pehle jaisa hi chala jayega.
+    let bills = { buyer: new Map(), supplier: new Map() };
+    try {
+      const cs = await getCommissionSettings();
+      bills = await generateDailyBills({
+        buyerDueDays:    cs?.buyerPaymentDays    || 30,
+        supplierDueDays: cs?.supplierPaymentDays || 60,
+      });
+    } catch (billErr) {
+      console.error("Bill generation skipped:", billErr.message);
+    }
+
     // ─── Har haal me emails bhejo ─────────────────────────
     //  Upar crash bhi ho gaya to jitne orders process ho chuke the,
     //  un ki summary email phir bhi jaayegi
-    await flushDigest(buyerDigest);
+    await flushDigest(buyerDigest, bills.buyer);
   }
 };
 

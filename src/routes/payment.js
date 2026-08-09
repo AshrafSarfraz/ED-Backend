@@ -1,8 +1,8 @@
 // 📁 routes/payment.js
 const express = require("express");
 const router  = express.Router();
-const multer  = require("multer");
-const upload  = multer({ storage: multer.memoryStorage() });
+// Shared upload rules — receipt image, max 5MB
+const upload = require("../middleware/multer");
 
 const {
   getPaymentDashboard,
