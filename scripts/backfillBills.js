@@ -10,6 +10,13 @@
 require("dotenv").config();
 const { El_Distributor } = require("../src/config/db");
 const Invoice = require("../src/models/invoice");
+
+// ⬇️ ZAROORI — billService andar .populate("buyerBranchId") / ("supplierBranchId")
+//    karta hai jo ref: "branch" use karte hain. Standalone script me routes load
+//    nahi hote, isliye ye models yahin register karne padte hain.
+require("../src/models/Branch");
+require("../src/models/createCompany");
+
 const { generateDailyBills } = require("../src/services/billService");
 const { getCommissionSettings } = require("../src/cron/commissionSettingService");
 
@@ -20,6 +27,7 @@ const run = async () => {
     El_Distributor.once("open", resolve);
   });
   console.log("✅ DB connected");
+  console.log("📦 Registered models:", Object.keys(El_Distributor.models).join(", "));
 
   const settings = await getCommissionSettings();
   const buyerDueDays    = settings.buyerPaymentDays    || 30;

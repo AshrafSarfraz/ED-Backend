@@ -10,7 +10,8 @@
 // ═══════════════════════════════════════════════════════
 const BillInvoice = require("../models/BillInvoice");
 const Invoice     = require("../models/invoice");
-
+require("../models/Branch");        // ← add
+require("../models/createCompany"); 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Cron ke `dateStr` jaisa hi — UTC day. Poore system me yahi grouping key hai.
