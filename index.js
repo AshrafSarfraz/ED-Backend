@@ -239,5 +239,21 @@ app.use((err, req, res, next) => {
 // ─── Start ────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  scheduleCrons(); // ← DB connect ho chuka hota hai, crons schedule karo
+
+  // scheduleCrons() DB se settings padhta hai. Pehle ye await/catch ke bagair
+  // tha — Mongo boot pe zara slow ho jaye to unhandled rejection se POORA
+  // server mar jata tha. Ab retry karta hai, API chalti rehti hai.
+  const startCrons = async (attempt = 1) => {
+    try {
+      await scheduleCrons();
+    } catch (err) {
+      console.error(`⚠️  Cron scheduling failed (attempt ${attempt}):`, err.message);
+      if (attempt < 5) {
+        setTimeout(() => startCrons(attempt + 1), 10000);
+      } else {
+        console.error("❌ Crons could not be scheduled. Server chal raha hai lekin bidding automation BAND hai.");
+      }
+    }
+  };
+  startCrons();
 });

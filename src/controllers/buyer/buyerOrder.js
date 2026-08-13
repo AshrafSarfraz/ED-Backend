@@ -1093,19 +1093,15 @@ exports.getOrderBiddingStatus = async (req, res) => {
     let windowEnded       = false;
 
     if (order.status === "in_bidding" && order.bulkOrderId) {
-      const lowest = await Bid.findOne({
-        bulkOrderId:  order.bulkOrderId,
-        pricePerUnit: { $ne: null },
-      })
-        .sort({ pricePerUnit: 1 })
-        .select("pricePerUnit");
+      // PROXY BIDDING: live rate ab BulkOrder.currentBid pe cached hai.
+      // Buyer ko currentBid dikhta hai — kisi supplier ki maxBid nahi.
+      const bulkLive = await BulkOrder.findById(order.bulkOrderId)
+        .select("currentBid");
+      currentLowestRate = bulkLive?.currentBid ?? null;
 
-      currentLowestRate = lowest?.pricePerUnit ?? null;
-
-      // sirf asli bids (ignored/missed nahi)
       bidCount = await Bid.countDocuments({
-        bulkOrderId:  order.bulkOrderId,
-        pricePerUnit: { $ne: null },
+        bulkOrderId: order.bulkOrderId,
+        status:      "active",
       });
 
       supplierCount = await SupplierItem.countDocuments({
@@ -1188,8 +1184,8 @@ exports.cancelOrder = async (req, res) => {
     let biddingEndsAt = null;
     if (order.status === "in_bidding" && order.bulkOrderId) {
       bidCount = await Bid.countDocuments({
-        bulkOrderId:  order.bulkOrderId,
-        pricePerUnit: { $ne: null },
+        bulkOrderId: order.bulkOrderId,
+        status:      "active",
       });
       const bulk = await BulkOrder.findById(order.bulkOrderId).select("biddingEndsAt");
       biddingEndsAt = bulk?.biddingEndsAt || null;

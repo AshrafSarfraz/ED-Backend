@@ -285,7 +285,7 @@
 //       await BulkOrder.findByIdAndUpdate(bulkOrder._id, {
 //         status:           "awarded",
 //         winnerSupplierId: winningBid.supplierBranchId,
-//         winningPrice:     winningBid.pricePerUnit,
+//         winningPrice:     winningPrice,
 //       });
 
 //       await Bid.findByIdAndUpdate(winningBid._id, { status: "won" });
@@ -310,7 +310,7 @@
 //       const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
 //       for (const bo of buyerOrders) {
-//         const rawTotal         = bo.quantity * winningBid.pricePerUnit;
+//         const rawTotal         = bo.quantity * winningPrice;
 //         const commissionAmount = Math.round(rawTotal * COMMISSION_PCT * 100) / 100;
 //         const deliveryAmount   = Math.round(rawTotal * DELIVERY_PCT   * 100) / 100;
 //         const totalFeeAmount   = commissionAmount + deliveryAmount;
@@ -338,7 +338,7 @@
 //           invoiceStatus:    "final",
 //           quantity:         bo.quantity,
 //           unit:             platformItem?.unit,
-//           pricePerUnit:     winningBid.pricePerUnit,
+//           pricePerUnit:     winningPrice,
 //           totalAmount:      rawTotal,
 //           commissionAmount,
 //           deliveryAmount,
@@ -363,7 +363,7 @@
 //           invoiceStatus:    "final",
 //           quantity:         bo.quantity,
 //           unit:             platformItem?.unit,
-//           pricePerUnit:     winningBid.pricePerUnit,
+//           pricePerUnit:     winningPrice,
 //           totalAmount:      rawTotal,
 //           commissionAmount: 0,
 //           deliveryAmount:   0,
@@ -399,7 +399,7 @@
 //           country:      country?.name,
 //           quantity:     bo.quantity,
 //           unit:         platformItem?.unit,
-//           pricePerUnit: Math.round(winningBid.pricePerUnit * 1.03 * 100) / 100,
+//           pricePerUnit: Math.round(winningPrice * 1.03 * 100) / 100,
 //           totalAmount:  buyerGrandTotal,
 //           packingDays,
 //         });
@@ -412,7 +412,7 @@
 //         console.log(`🧾 Buyer: ${buyerInvNum} | Supplier: ${supplierInvNum}`);
 //       }
 
-//       console.log(`✅ Winner: ${winningBid.pricePerUnit} QAR`);
+//       console.log(`✅ Winner: ${winningPrice} QAR`);
 //     }
 //   } catch (err) {
 //     console.error("Winner Cron error:", err);
@@ -473,6 +473,7 @@ const { getBiddingSettings } = require("./settingService");
 const { getCommissionSettings } = require("./commissionSettingService");
 const ledger = require("../services/ledgerService");
 const { generateDailyBills } = require("../services/billService");
+const { recompute, withBiddingLock } = require("../services/biddingEngine");
 const {
   sendOrdersWonSummaryEmail,
   sendOrdersCancelledSummaryEmail,
@@ -480,11 +481,13 @@ const {
 const {
   notifyBiddingResult,
   notifyBiddingStarted,
+  notifyBiddingClosingSoon,
   getTokensForBranches,
 } = require("../notification/notificationService");
 
 let biddingStartJob = null;
 let winnerJob       = null;
+let reminderJob     = null;
 
 // ─────────────────────────────────────────────────────────
 //  Qatar time helpers (Qatar = UTC+3, no DST)
@@ -693,37 +696,50 @@ const notifyEligibleSuppliers = async (openedBulkOrders) => {
 // ─────────────────────────────────────────────────────────
 //  Missed bids record karo
 // ─────────────────────────────────────────────────────────
+//  PROXY BIDDING: "missed" ka matlab ab = eligible tha, JOIN hi nahi kiya.
+//  Filter wahi hona chahiye jo join gate pe hai (isListed AND isAvailableToday),
+//  warna jis supplier ne khud ko unavailable kiya usay bhi missed mark kar dete
+//  the — jo uske stats me ghalat ginti barhata tha.
+//
+//  Purana version har eligible item pe 2 query maarta tha (Bid.findOne +
+//  Branch.findById). Ab 3 query total.
 const recordMissedBids = async (bulkOrder) => {
-  const eligible = await SupplierItem.find({
-    platformItemId: bulkOrder.platformItemId,
-    countryId:      bulkOrder.countryId,
-    isListed:       true,
-  });
+  try {
+    const eligible = await SupplierItem.find({
+      platformItemId:   bulkOrder.platformItemId,
+      countryId:        bulkOrder.countryId,
+      isListed:         true,
+      isAvailableToday: true,
+    }).select("branchId").lean();
 
-  const seen = new Set();
-  for (const si of eligible) {
-    const sid = si.branchId.toString();
-    if (seen.has(sid)) continue;
-    seen.add(sid);
+    if (eligible.length === 0) return;
 
-    const existing = await Bid.findOne({
-      bulkOrderId:      bulkOrder._id,
-      supplierBranchId: si.branchId,
-    });
-    if (existing) continue;
+    const branchIds = [...new Set(eligible.map(si => String(si.branchId)))];
 
-    const branch = await Branch.findById(si.branchId).select("companyId");
-    if (!branch) continue;
+    const joined = await Bid.find({ bulkOrderId: bulkOrder._id })
+      .select("supplierBranchId").lean();
+    const joinedSet = new Set(joined.map(b => String(b.supplierBranchId)));
 
-    try {
-      await Bid.create({
-        bulkOrderId:       bulkOrder._id,
-        supplierBranchId:  si.branchId,
-        supplierCompanyId: branch.companyId,
-        pricePerUnit:      null,
-        status:            "missed",
-      });
-    } catch (e) {}
+    const missing = branchIds.filter(id => !joinedSet.has(id));
+    if (missing.length === 0) return;
+
+    const branches = await Branch.find({ _id: { $in: missing } })
+      .select("companyId").lean();
+
+    const docs = branches.map(b => ({
+      bulkOrderId:       bulkOrder._id,
+      supplierBranchId:  b._id,
+      supplierCompanyId: b.companyId,
+      openBid:  0,      // join hi nahi kiya — koi price nahi
+      maxBid:   0,
+      joinedAt: new Date(),
+      status:   "missed",
+    }));
+
+    if (docs.length) await Bid.insertMany(docs, { ordered: false });
+  } catch (err) {
+    // duplicate key etc — missed record banna kabhi winner flow na toray
+    if (err.code !== 11000) console.error("recordMissedBids error:", err.message);
   }
 };
 
@@ -881,22 +897,42 @@ const runWinnerSelect = async (settings) => {
     const DELIVERY_PCT   = commSettings.deliveryFee         / 100;  // e.g. 0.01
     const BUYER_DUE_DAYS = commSettings.buyerPaymentDays;           // e.g. 30
 
-    const activeBulkOrders = await BulkOrder.find({ status: "bidding" });
+    // ⚠️ biddingEndsAt filter pehle NAHI tha — cron har "bidding" bulk order
+    //    uthata tha chahe uska window abhi live ho. Admin timings badle to
+    //    live bidding waqt se pehle award ho jati thi.
+    const activeBulkOrders = await BulkOrder.find({
+      status:        "bidding",
+      biddingEndsAt: { $lte: new Date() },
+    });
     if (activeBulkOrders.length === 0) {
-      console.log("❌ Koi active bulk order nahi");
+      console.log("❌ Koi closed bulk order nahi");
       return;
     }
 
     for (const bulkOrder of activeBulkOrders) {
       const platformItem = await PlatformItem.findById(bulkOrder.platformItemId);
       const country      = await Country.findById(bulkOrder.countryId);
-      const winningBid   = await Bid.findOne({
-        bulkOrderId:  bulkOrder._id,
-        pricePerUnit: { $ne: null },
-      }).sort({ pricePerUnit: 1 });
+      // ─── PROXY BIDDING ─────────────────────────────────
+      //  Winner har waqt maloom hai (currentLeaderId). Cron sirf ek
+      //  aakhri recompute karta hai — agar koi write miss hui ho.
+      await withBiddingLock(bulkOrder._id, () => recompute(bulkOrder._id))
+        .catch(err => console.error("Final recompute failed:", err.message));
 
-      // ─── No bid → CANCEL ───────────────────────────────
-      if (!winningBid) {
+      const fresh = await BulkOrder.findById(bulkOrder._id)
+        .select("currentBid currentLeaderId");
+
+      const winningBid = fresh?.currentLeaderId
+        ? await Bid.findOne({
+            bulkOrderId:      bulkOrder._id,
+            supplierBranchId: fresh.currentLeaderId,
+            status:           "active",
+          })
+        : null;
+
+      const winningPrice = fresh?.currentBid ?? null;
+
+      // ─── Koi join hi nahi kiya → CANCEL ────────────────
+      if (!winningBid || winningPrice === null) {
         await BulkOrder.findByIdAndUpdate(bulkOrder._id, { status: "cancelled" });
 
         const buyerOrders = await BuyerOrder.find({
@@ -924,15 +960,15 @@ const runWinnerSelect = async (settings) => {
       await BulkOrder.findByIdAndUpdate(bulkOrder._id, {
         status:           "awarded",
         winnerSupplierId: winningBid.supplierBranchId,
-        winningPrice:     winningBid.pricePerUnit,
+        winningPrice,     // ← computed currentBid, kisi ki maxBid NAHI
       });
 
       await Bid.findByIdAndUpdate(winningBid._id, { status: "won" });
       await Bid.updateMany(
         {
-          bulkOrderId:  bulkOrder._id,
-          _id:          { $ne: winningBid._id },
-          pricePerUnit: { $ne: null },
+          bulkOrderId: bulkOrder._id,
+          _id:         { $ne: winningBid._id },
+          status:      "active",
         },
         { status: "lost" }
       );
@@ -946,7 +982,7 @@ const runWinnerSelect = async (settings) => {
       const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
       for (const bo of buyerOrders) {
-        const rawTotal         = bo.quantity * winningBid.pricePerUnit;
+        const rawTotal         = bo.quantity * winningPrice;
         const commissionAmount = Math.round(rawTotal * COMMISSION_PCT * 100) / 100;
         const deliveryAmount   = Math.round(rawTotal * DELIVERY_PCT   * 100) / 100;
         const totalFeeAmount   = commissionAmount + deliveryAmount;
@@ -974,7 +1010,7 @@ const runWinnerSelect = async (settings) => {
           invoiceStatus:    "final",
           quantity:         bo.quantity,
           unit:             platformItem?.unit,
-          pricePerUnit:     winningBid.pricePerUnit,
+          pricePerUnit:     winningPrice,
           totalAmount:      rawTotal,
           commissionAmount,
           deliveryAmount,
@@ -999,7 +1035,7 @@ const runWinnerSelect = async (settings) => {
           invoiceStatus:    "final",
           quantity:         bo.quantity,
           unit:             platformItem?.unit,
-          pricePerUnit:     winningBid.pricePerUnit,
+          pricePerUnit:     winningPrice,
           totalAmount:      rawTotal,
           commissionAmount: 0,
           deliveryAmount:   0,
@@ -1034,7 +1070,9 @@ const runWinnerSelect = async (settings) => {
           country:      country?.name,
           quantity:     bo.quantity,
           unit:         platformItem?.unit,
-          pricePerUnit: Math.round(winningBid.pricePerUnit * 1.03 * 100) / 100,
+          // Pehle yahan 1.03 hardcoded tha — admin commission ya delivery %
+          // badle to email me galat rate jata tha. Ab actual settings se.
+          pricePerUnit: Math.round(winningPrice * (1 + COMMISSION_PCT + DELIVERY_PCT) * 100) / 100,
           totalAmount:  buyerGrandTotal,
         });
 
@@ -1046,7 +1084,7 @@ const runWinnerSelect = async (settings) => {
         console.log(`🧾 Buyer: ${buyerInvNum} | Supplier: ${supplierInvNum}`);
       }
 
-      console.log(`✅ Winner: ${winningBid.pricePerUnit} QAR`);
+      console.log(`✅ Winner: ${winningPrice} QAR`);
     }
   } catch (err) {
     console.error("Winner Cron error:", err);
@@ -1074,13 +1112,111 @@ const runWinnerSelect = async (settings) => {
 };
 
 // ═══════════════════════════════════════════════
-// 3) Schedule / Reschedule
+// 3) CLOSING REMINDER — bidding band hone se N minute pehle
+//
+//    Teen audience, har supplier ko EK hi push:
+//      behind    → join kiya hai lekin haar raha hai   (action chahiye)
+//      notJoined → eligible hai, join nahi kiya        (action chahiye)
+//      leading   → aage hai                            (sirf tasalli)
+//
+//    Ye TURANT wali outbid notification ka BADAL nahi hai —
+//    wo biddingEngine se leaderChanged pe jati hai. Ye backstop hai.
+// ═══════════════════════════════════════════════
+const runBiddingReminder = async () => {
+  console.log("⏰ Bidding Reminder Cron...");
+  try {
+    const settings = await getBiddingSettings();
+    const mins     = settings.BIDDING_REMINDER_MINUTES || 10;
+    const now      = new Date();
+
+    const bulks = await BulkOrder.find({
+      status:         "bidding",
+      biddingEndsAt:  { $gt: now },
+      reminderSentAt: null,          // idempotent — restart / retry safe
+    })
+      .select("_id platformItemId countryId currentLeaderId biddingEndsAt")
+      .populate("platformItemId", "name")
+      .lean();
+
+    if (bulks.length === 0) {
+      console.log("🔕 Reminder — koi open bidding nahi");
+      return;
+    }
+
+    // branchIdStr → { leading: [], behind: [], notJoined: [] }
+    const perSupplier = new Map();
+    const bucket = (id, key, name) => {
+      if (!perSupplier.has(id)) perSupplier.set(id, { leading: [], behind: [], notJoined: [] });
+      perSupplier.get(id)[key].push(name || null);
+    };
+
+    for (const bulk of bulks) {
+      const leaderId = bulk.currentLeaderId ? String(bulk.currentLeaderId) : null;
+      const itemName = bulk.platformItemId?.name;
+
+      const joined = await Bid.find({ bulkOrderId: bulk._id, status: "active" })
+        .select("supplierBranchId").lean();
+      const joinedSet = new Set(joined.map(b => String(b.supplierBranchId)));
+
+      for (const id of joinedSet) {
+        bucket(id, id === leaderId ? "leading" : "behind", itemName);
+      }
+
+      // eligible-but-not-joined — join gate jaisa hi filter
+      const eligible = await SupplierItem.find({
+        platformItemId:   bulk.platformItemId?._id || bulk.platformItemId,
+        countryId:        bulk.countryId,
+        isListed:         true,
+        isAvailableToday: true,
+      }).select("branchId").lean();
+
+      for (const e of eligible) {
+        const id = String(e.branchId);
+        if (!joinedSet.has(id)) bucket(id, "notJoined", itemName);
+      }
+    }
+
+    if (perSupplier.size === 0) {
+      console.log("🔕 Reminder — koi supplier nahi");
+      return;
+    }
+
+    // Saare tokens EK query me
+    const tokenMap = await getTokensForBranches([...perSupplier.keys()]);
+
+    let pushed = 0;
+    for (const [branchId, info] of perSupplier) {
+      const tokens = tokenMap.get(branchId);
+      if (!tokens) continue;   // app install nahi / logout / approved nahi
+      try {
+        await notifyBiddingClosingSoon(branchId, { ...info, minutesLeft: mins }, tokens);
+        pushed += 1;
+      } catch (err) {
+        console.error(`Reminder push failed for ${branchId}:`, err.message);
+      }
+    }
+
+    await BulkOrder.updateMany(
+      { _id: { $in: bulks.map(b => b._id) } },
+      { reminderSentAt: new Date() }
+    );
+
+    console.log(`🔔 Closing reminder (${mins} min) → ${pushed} supplier(s)`);
+  } catch (err) {
+    // Reminder fail hona bidding ko kabhi na toray
+    console.error("runBiddingReminder error:", err.message);
+  }
+};
+
+// ═══════════════════════════════════════════════
+// 4) Schedule / Reschedule
 // ═══════════════════════════════════════════════
 const scheduleCrons = async () => {
   const s = await getBiddingSettings();
 
   if (biddingStartJob) biddingStartJob.stop();
   if (winnerJob)       winnerJob.stop();
+  if (reminderJob)     reminderJob.stop();
 
   const startExpr  = `${s.BIDDING_START_MIN} ${s.BIDDING_START_HOUR} * * *`;
   const winnerExpr = `${s.WINNER_MIN} ${s.WINNER_HOUR} * * *`;
@@ -1103,11 +1239,43 @@ const scheduleCrons = async () => {
     { timezone: "Asia/Qatar" }
   );
 
-  console.log(`🕒 Crons set → Start: ${startExpr} | Winner: ${winnerExpr} (Qatar)`);
+  // ─── Reminder — winner time se N minute pehle ───────────
+  const reminderMins = s.BIDDING_REMINDER_MINUTES || 10;
+  const startMins    = s.BIDDING_START_HOUR * 60 + s.BIDDING_START_MIN;
+  const winnerMins   = s.WINNER_HOUR        * 60 + s.WINNER_MIN;
+  const windowMins   = winnerMins - startMins;
+
+  let reminderExpr = null;
+  if (windowMins > reminderMins) {
+    // aadhi raat ke aar paar wrap ho jaye to bhi sahi minute nikle
+    const rm = (((winnerMins - reminderMins) % 1440) + 1440) % 1440;
+    reminderExpr = `${rm % 60} ${Math.floor(rm / 60)} * * *`;
+
+    reminderJob = cron.schedule(reminderExpr, runBiddingReminder, { timezone: "Asia/Qatar" });
+
+    if (windowMins < reminderMins + 15) {
+      console.warn(
+        `⚠️  Bidding window sirf ${windowMins} min ka hai. Reminder bidding khulne ke ` +
+        `${windowMins - reminderMins} min baad hi chala jayega — supplier ke paas react ` +
+        `karne ka waqt nahi hoga. Window barhana behtar hai.`
+      );
+    }
+  } else {
+    console.warn(
+      `⚠️  Bidding window (${windowMins} min) reminder offset (${reminderMins} min) se ` +
+      `chhota ya barabar hai — closing reminder schedule NAHI hui.`
+    );
+  }
+
+  console.log(
+    `🕒 Crons set → Start: ${startExpr} | Winner: ${winnerExpr}` +
+    `${reminderExpr ? ` | Reminder: ${reminderExpr}` : " | Reminder: off"} (Qatar)`
+  );
 };
 
 module.exports = {
   scheduleCrons,
   runBiddingStart,
   runWinnerSelect,
+  runBiddingReminder,
 };

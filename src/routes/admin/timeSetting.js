@@ -6,10 +6,14 @@ const {
   getLateOrders,
   resolveLateOrder,
 } = require("../../controllers/admin/Timesetting");
+const { protectAdmin, adminOnly } = require("../../middleware/protectAdmin");
 
-router.get("/timeline",                              getTimeline);
-router.put("/timeline",                              updateTimeline);
-router.get("/late-orders",                           getLateOrders);
-router.put("/late-orders/:bulkOrderId/resolve",      resolveLateOrder);
+// ⚠️ SECURITY FIX — ye chaaron routes pehle BILKUL open the.
+//    Koi bhi bina token ke PUT /api/admin/settings/timeline maar ke
+//    bidding ki timings badal sakta tha.
+router.get("/timeline",                          protectAdmin, adminOnly, getTimeline);
+router.put("/timeline",                          protectAdmin, adminOnly, updateTimeline);
+router.get("/late-orders",                       protectAdmin, adminOnly, getLateOrders);
+router.put("/late-orders/:bulkOrderId/resolve",  protectAdmin, adminOnly, resolveLateOrder);
 
 module.exports = router;

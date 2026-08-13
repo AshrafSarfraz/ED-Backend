@@ -393,7 +393,8 @@ exports.getBidHistory = async (req, res) => {
       .map((bid) => ({
         bidId:         bid._id,
         status:        bid.status,
-        myPrice:       bid.pricePerUnit,
+        myPrice:       bid.maxBid,      // proxy bidding: ab maxBid hai (apni hi)
+        myOpenBid:     bid.openBid,
         item:          bid.bulkOrderId?.platformItemId?.name,
         unit:          bid.bulkOrderId?.platformItemId?.unit,
         country:       bid.bulkOrderId?.countryId?.name,

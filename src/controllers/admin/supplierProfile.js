@@ -97,7 +97,9 @@ exports.getSupplierProfile = async (req, res) => {
         totalBids: bidStatusCounts.reduce((s, r) => s + r.count, 0),
         won:      bidMap.won      || 0,
         lost:     bidMap.lost     || 0,
-        missed:   bidMap.missed   || 0,
+        missed:   bidMap.missed   || 0,      // eligible tha, join nahi kiya
+        active:   bidMap.active   || 0,      // abhi chal rahi bidding
+        // purane records ke liye — naye system me ye statuses nahi bante
         ignored:  bidMap.ignored  || 0,
         pending:  bidMap.pending  || 0,
       },

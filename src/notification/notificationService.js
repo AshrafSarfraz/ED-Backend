@@ -13,6 +13,8 @@
 //       notifyBulkDelivered   → Supplier(bulk order ki saari delivery complete)
 //    3. notifyReturnRequest   → Supplier(buyer ne return maanga)
 //    4. notifyBiddingStarted  → Supplier(nayi bidding khuli jisme wo bid kar sakta hai)
+//    5. notifyOutbid          → Supplier(uski lead chheen li gayi — real-time)
+//    6. notifyBiddingClosingSoon → Supplier(bidding band hone se 10 min pehle)
 // ═══════════════════════════════════════════════════════
 const Branch = require("../models/Branch");
 
@@ -284,15 +286,103 @@ async function notifyBiddingStarted(branchId, { biddingCount = 1, sampleItem }, 
   }, tokens);
 }
 
+
+// ═══════════════════════════════════════════════════════
+//  5) SUPPLIER — Outbid (lead chheen li gayi)
+//     biddingEngine recompute() me leaderChanged aane pe TURANT
+//
+//  Ye reminder se ZYADA ahem hai. Proxy bidding me supplier apni max
+//  set kar ke chala jata hai; agar usay pata hi na chale ke wo peeche
+//  ho gaya to poora mechanism bekaar hai.
+// ═══════════════════════════════════════════════════════
+/**
+ * @param {object} p
+ * @param {string} [p.itemName]
+ * @param {number} [p.currentBid]   - nayi current bid (max bid NAHI)
+ * @param {number} [p.minutesLeft]
+ */
+async function notifyOutbid(branchId, { itemName, currentBid, minutesLeft } = {}, tokens = null) {
+  const item = itemName ? ` on ${itemName}` : "";
+  const left = (minutesLeft !== null && minutesLeft !== undefined)
+    ? ` ${minutesLeft} min left.`
+    : "";
+  const at   = (currentBid !== null && currentBid !== undefined)
+    ? ` Current bid is ${currentBid}.`
+    : "";
+
+  return sendToBranch(branchId, {
+    title: "You've been outbid",
+    body:  `Someone has taken the lead${item}.${at}${left} Lower your max bid to get back in front.`,
+    data: {
+      type:       "bidding_outbid",
+      screen:     SCREENS.SUPPLIER_BIDDING,
+      currentBid: currentBid ?? "",
+    },
+  }, tokens);
+}
+
+// ═══════════════════════════════════════════════════════
+//  6) SUPPLIER — Bidding closing soon (default: 10 min pehle)
+//     biddingReminderCron se — har supplier ko EK push,
+//     chahe uski 5 biddings chal rahi hon.
+// ═══════════════════════════════════════════════════════
+/**
+ * @param {object} p
+ * @param {string[]} p.leading    - jin items pe wo lead kar raha hai
+ * @param {string[]} p.behind     - jin pe peeche hai  → action chahiye
+ * @param {string[]} p.notJoined  - eligible tha, join nahi kiya → action chahiye
+ * @param {number}   p.minutesLeft
+ */
+async function notifyBiddingClosingSoon(
+  branchId,
+  { leading = [], behind = [], notJoined = [], minutesLeft = 10 } = {},
+  tokens = null
+) {
+  if (!leading.length && !behind.length && !notJoined.length) return { skipped: true };
+
+  let title, body;
+
+  if (behind.length > 0) {
+    // Sab se urgent — join kar chuka hai lekin haar raha hai
+    const s = behind.length > 1 ? "s" : "";
+    title = `${minutesLeft} minutes left`;
+    body  = `You're behind on ${behind.length} bidding${s}. Lower your max bid before it closes.`;
+  } else if (notJoined.length > 0) {
+    const s = notJoined.length > 1 ? "s" : "";
+    title = `${minutesLeft} minutes left`;
+    body  = `${notJoined.length} bidding${s} open for you — last chance to join.`;
+  } else {
+    // Sirf leading — tasalli wali khabar, koi action nahi
+    const s = leading.length > 1 ? "s" : "";
+    title = `${minutesLeft} minutes left`;
+    body  = `You're leading on ${leading.length} bidding${s}. Nothing to do — we'll hold your position.`;
+  }
+
+  return sendToBranch(branchId, {
+    title,
+    body,
+    data: {
+      type:        "bidding_closing_soon",
+      screen:      SCREENS.SUPPLIER_BIDDING,
+      behind:      behind.length,
+      leading:     leading.length,
+      notJoined:   notJoined.length,
+      minutesLeft,
+    },
+  }, tokens);
+}
+
 module.exports = {
   // core
   sendToBranch,
   getTokensForBranches,
   SCREENS,
   // triggers
-  notifyBiddingResult,     // 1 — buyer
-  notifyOrderDelivered,    // 2a — buyer
-  notifyBulkDelivered,     // 2b — supplier
-  notifyReturnRequest,     // 3 — supplier
-  notifyBiddingStarted,    // 4 — supplier
+  notifyBiddingResult,       // 1 — buyer
+  notifyOrderDelivered,      // 2a — buyer
+  notifyBulkDelivered,       // 2b — supplier
+  notifyReturnRequest,       // 3 — supplier
+  notifyBiddingStarted,      // 4 — supplier
+  notifyOutbid,              // 5 — supplier (proxy bidding, real-time)
+  notifyBiddingClosingSoon,  // 6 — supplier (10 min reminder)
 };

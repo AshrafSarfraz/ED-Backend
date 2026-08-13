@@ -51,6 +51,9 @@ const DEFAULTS = {
   WINNER_MIN:          58,
   BIDDING_CUTOFF_HOUR: 15,  // Qatar hour — placeOrder today/tomorrow cutoff
   BIDDING_CUTOFF_MIN:  45,  // Qatar minute — cutoff ka minute hissa
+
+  // Bidding band hone se kitni der pehle reminder push jaye
+  BIDDING_REMINDER_MINUTES: 10,
 };
 
 const KEY = "bidding_schedule";
@@ -93,10 +96,16 @@ const updateBiddingSettings = async (newValues) => {
 const getCutoffMinutes = (settings) =>
   settings.BIDDING_CUTOFF_HOUR * 60 + settings.BIDDING_CUTOFF_MIN;
 
+// Window ki lambai minutes me — reminder schedule karne se pehle check hota hai
+const getWindowMinutes = (settings) =>
+  (settings.WINNER_HOUR * 60 + settings.WINNER_MIN) -
+  (settings.BIDDING_START_HOUR * 60 + settings.BIDDING_START_MIN);
+
 module.exports = {
   getBiddingSettings,
   updateBiddingSettings,
   getCutoffMinutes,
+  getWindowMinutes,
   DEFAULTS,
   KEY,
 };

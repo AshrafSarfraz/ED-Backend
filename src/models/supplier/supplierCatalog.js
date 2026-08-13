@@ -63,6 +63,13 @@ const supplierItemSchema = new mongoose.Schema(
 // e.g. Pakistani Tomato + Indian Tomato — both allowed
 supplierItemSchema.index({ branchId: 1, platformItemId: 1, countryId: 1 }, { unique: true });
 
+// ─── ELIGIBILITY LOOKUP ──────────────────────────────────
+//  Bidding ki saari queries is shape pe chalti hain:
+//     { platformItemId, countryId, isListed, isAvailableToday }
+//  Upar wala index branchId se shuru hota hai isliye wo USE HI NAHI HOTA —
+//  ab tak har eligibility lookup full collection scan tha.
+supplierItemSchema.index({ platformItemId: 1, countryId: 1, isListed: 1, isAvailableToday: 1 });
+
 module.exports =
   El_Distributor.models["SupplierItem"] ||
   El_Distributor.model("SupplierItem", supplierItemSchema);

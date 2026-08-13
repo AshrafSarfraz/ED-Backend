@@ -41,10 +41,10 @@ exports.getBulkOrders = async (req, res) => {
     const data = await Promise.all(
       bulkOrders.map(async (b) => {
         const totalBids = await Bid.countDocuments({ bulkOrderId: b._id });
+        // PROXY BIDDING: "placed" = jisne actually JOIN kiya
         const placedBids = await Bid.countDocuments({
-          bulkOrderId:  b._id,
-          status:       { $nin: ["ignored", "missed"] },
-          pricePerUnit: { $ne: null },
+          bulkOrderId: b._id,
+          status:      { $nin: ["missed", "ignored"] },
         });
 
         return {
@@ -105,7 +105,7 @@ exports.getBulkOrderDetail = async (req, res) => {
     // Bids
     const bids = await Bid.find({ bulkOrderId: bulk._id })
       .populate("supplierBranchId", "managerName companyName email")
-      .sort({ pricePerUnit: 1 });
+      .sort({ maxBid: 1, joinedAt: 1 });   // wahi sort jo recompute() use karta hai
 
     // Buyer orders
     const buyerOrders = await BuyerOrder.find({ bulkOrderId: bulk._id })
@@ -130,12 +130,21 @@ exports.getBulkOrderDetail = async (req, res) => {
     });
     // ─────────────────────────────────────────────────────
 
+    // ─── MAX BID VISIBILITY ──────────────────────────────
+    //  Bidding LIVE ho to admin ko bhi maxBid nahi dikhti — warna
+    //  chalti hui auction ki secret info leak ho sakti hai.
+    //  Band hone ke baad poori visibility, taake dispute resolve ho sake
+    //  ("dono ki max 4.80 thi, X pehle joined tha isliye X jeeta").
+    const biddingClosed = bulk.status !== "bidding";
+
     const bidsData = bids.map((bid, i) => ({
       rank:         bid.status === "won" ? 1 : i + 1,
       supplierName: bid.supplierBranchId?.managerName,
       companyName:  bid.supplierBranchId?.companyName,
       email:        bid.supplierBranchId?.email,
-      pricePerUnit: bid.pricePerUnit,
+      openBid:      bid.openBid,                              // catalog rate — kabhi secret nahi
+      maxBid:       biddingClosed ? bid.maxBid : null,        // ← live me chhupi rehti hai
+      joinedAt:     bid.joinedAt,                             // tie-break ki wajah
       status:       bid.status,
       isWinner:     bid.status === "won",
     }));
@@ -222,7 +231,8 @@ exports.getSupplierPerformance = async (req, res) => {
       if (b.status === "won")     map[id].wins++;
       if (b.status === "lost")    map[id].lost++;
       if (b.status === "missed")  map[id].missed++;
-      if (b.status === "ignored") map[id].ignored++;
+      if (b.status === "active")  map[id].active = (map[id].active || 0) + 1;
+      if (b.status === "ignored") map[id].ignored++;   // legacy records
     });
 
     const result = Object.values(map).sort((a, b) => b.wins - a.wins);
