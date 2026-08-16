@@ -287,7 +287,7 @@ exports.branchLogin = async (req, res) => {
     const isMatch = await bcrypt.compare(password, branch.password);
     if (!isMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: branch._id, type: "branch" }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ id: branch._id, type: "branch" }, process.env.JWT_SECRET,       { expiresIn: process.env.JWT_EXPIRES_IN });
 
     res.json({
       success: true,
