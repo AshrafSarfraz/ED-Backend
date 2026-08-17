@@ -44,6 +44,15 @@ const companySchema = new mongoose.Schema(
       default: "pending",
     },
 
+    crNumber: { type: String, default: null, trim: true },
+    crImage:  { type: String, default: null },
+    crExpiry: { type: Date,   default: null },
+    crStatus: {
+      type:    String,
+      enum:    ["pending", "submitted", "approved", "rejected", "expired"],
+      default: "pending",
+    },
+
     // ─── Overall Documents Status ──────────────────────
     documentsStatus: {
       type:    String,

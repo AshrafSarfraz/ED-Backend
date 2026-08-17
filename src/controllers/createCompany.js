@@ -116,7 +116,7 @@ exports.updateDocuments = async (req, res) => {
     const company    = await Company.findById(req.company._id);
     const updateData = {};
 
-    const { tradeLicenseExpiry, qidExpiry } = req.body;
+    const { tradeLicenseExpiry, qidExpiry, crExpiry, crNumber } = req.body;
 
     // Company Logo
     if (req.files?.companyLogo) {
@@ -150,14 +150,29 @@ exports.updateDocuments = async (req, res) => {
       updateData.qidExpiry = new Date(qidExpiry);
     }
 
+    // CR
+    if (req.files?.crImage) {
+      const file = req.files.crImage[0];
+      updateData.crImage  = await uploadToFirebase(
+        file.buffer, file.originalname, `cr-images/${company._id}`
+      );
+      updateData.crStatus = "submitted";
+    }
+    if (crExpiry) updateData.crExpiry = new Date(crExpiry);
+    if (crNumber) updateData.crNumber = crNumber;
+
     // Overall status check
     const tlStatus  = updateData.tradeLicenseStatus || company.tradeLicenseStatus;
     const qidStatus = updateData.qidStatus          || company.qidStatus;
+    const crStatus  = updateData.crStatus           || company.crStatus || "pending";
+
 
     const tlDone  = ["submitted", "approved"].includes(tlStatus);
     const qidDone = ["submitted", "approved"].includes(qidStatus);
+    const crDone  = ["submitted", "approved"].includes(crStatus);
 
-    if (tlDone && qidDone) {
+
+    if (tlDone && qidDone && crDone) {
       updateData.documentsStatus           = "submitted";
       updateData.documentsRejectionReason  = null;
     }
@@ -265,7 +280,7 @@ exports.getCompany = async (req, res) => {
 // ═══════════════════════════════════════════════════════
 exports.approveDocuments = async (req, res) => {
   try {
-    const { action, reason, tradeLicenseExpiry, qidExpiry } = req.body;
+    const { action, reason, tradeLicenseExpiry, qidExpiry, crExpiry } = req.body;
 
     if (!["approve", "reject"].includes(action)) {
       return res.status(400).json({ success: false, message: "action must be approve or reject" });
@@ -283,9 +298,12 @@ exports.approveDocuments = async (req, res) => {
       updateData.documentsRejectionReason = null;
       updateData.tradeLicenseStatus       = "approved";
       updateData.qidStatus                = "approved";
+      updateData.crStatus                 = "approved"; 
 
       if (tradeLicenseExpiry) updateData.tradeLicenseExpiry = new Date(tradeLicenseExpiry);
       if (qidExpiry)          updateData.qidExpiry          = new Date(qidExpiry);
+      if (crExpiry)           updateData.crExpiry           = new Date(crExpiry); 
+
 
       await sendCompanyDocumentEmail({
         toEmail:   company.email,
@@ -297,6 +315,7 @@ exports.approveDocuments = async (req, res) => {
       updateData.documentsRejectionReason = reason || "Documents not valid";
       updateData.tradeLicenseStatus       = "rejected";
       updateData.qidStatus                = "rejected";
+      updateData.crStatus                 = "rejected"; 
 
       await sendCompanyDocumentEmail({
         toEmail:   company.email,

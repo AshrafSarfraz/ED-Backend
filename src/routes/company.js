@@ -34,6 +34,7 @@ router.patch(
     { name: "companyLogo",       maxCount: 1 },
     { name: "tradeLicenseImage", maxCount: 1 },
     { name: "qidImage",          maxCount: 1 },
+    { name: "crImage",           maxCount: 1 },
   ]),
   updateDocuments
 );
