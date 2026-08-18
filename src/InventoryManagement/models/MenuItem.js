@@ -20,6 +20,9 @@ const menuItemSchema = new mongoose.Schema(
     nameKey:  { type: String, required: true },
     price:    { type: Number, required: true, min: 0 },
     category: { type: String, required: true, trim: true, maxlength: 60 },
+    // OPTIONAL - Firebase Storage ka public URL. Khali chhoro to kuch nahi tootta,
+    // POS grid naam ka pehla letter dikha deta hai.
+    image:    { type: String, default: '', trim: true, maxlength: 500 },
     recipe:   { type: [recipeLineSchema], default: [] },
     isActive: { type: Boolean, default: true },
   },

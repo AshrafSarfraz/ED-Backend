@@ -2,6 +2,7 @@ const MenuItem = require('../models/MenuItem');
 const Ingredient = require('../models/Ingredient');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidUnit, sameFamily, familyOf, unitsOfFamily, round } = require('../utils/units');
+const { saveImage, deleteImage } = require('../utils/image');
 const S = require('../utils/sanitize');
 
 /* GET /api/menu-items?search=&category=&page=&limit= */
@@ -50,12 +51,16 @@ exports.getOne = asyncHandler(async (req, res) => {
   res.json({ ...item, recipe });
 });
 
-/* POST /api/menu-items */
+/* POST /api/menu-items   (JSON, ya multipart with optional `image` file) */
 exports.create = asyncHandler(async (req, res) => {
   const data = await readBody(req);
 
   const dup = await MenuItem.findOne({ branch: req.branch._id, nameKey: data.nameKey }).lean();
-  if (dup) throw S.conflict(`Menu item "${dup.name}" already exists`);
+  if (dup) {
+    // item bana hi nahi, to abhi upload hui file storage me pari na rahe
+    if (data.image) await deleteImage(data.image);
+    throw S.conflict(`Menu item "${dup.name}" already exists`);
+  }
 
   const item = await MenuItem.create({ branch: req.branch._id, ...data });
   res.status(201).json(item);
@@ -68,17 +73,26 @@ exports.update = asyncHandler(async (req, res) => {
   const item = await MenuItem.findOne({ _id: req.params.id, branch: req.branch._id });
   if (!item) throw S.notFound('Menu item not found');
 
-  const data = await readBody(req);
+  const data = await readBody(req, item);
 
   const dup = await MenuItem.findOne({
     branch: req.branch._id,
     nameKey: data.nameKey,
     _id: { $ne: item._id },
   }).lean();
-  if (dup) throw S.conflict(`Menu item "${dup.name}" already exists`);
+  if (dup) {
+    if (data.image && data.image !== item.image) await deleteImage(data.image);
+    throw S.conflict(`Menu item "${dup.name}" already exists`);
+  }
+
+  const oldImage = item.image;
 
   item.set(data);
   await item.save();
+
+  // nayi photo aa gayi ya hata di gayi -> purani file storage se nikal do
+  if (oldImage && oldImage !== item.image) deleteImage(oldImage);
+
   res.json(item);
 });
 
@@ -89,9 +103,11 @@ exports.remove = asyncHandler(async (req, res) => {
   if (S.bool(req.query.hard)) {
     const gone = await MenuItem.findOneAndDelete({ _id: req.params.id, branch: req.branch._id });
     if (!gone) throw S.notFound('Menu item not found');
+    if (gone.image) await deleteImage(gone.image);   // hard delete = photo bhi jaye
     return res.json({ message: 'Menu item permanently deleted' });
   }
 
+  // soft delete pe photo rehne do - dobara activate karna ho to wapas mil jaye
   const item = await MenuItem.findOneAndUpdate(
     { _id: req.params.id, branch: req.branch._id },
     { $set: { isActive: false } },
@@ -103,7 +119,7 @@ exports.remove = asyncHandler(async (req, res) => {
 
 /* ================================================================== */
 
-async function readBody(req) {
+async function readBody(req, existing = null) {
   const src = req.body || {};
 
   const name = S.str(src.name);
@@ -115,7 +131,7 @@ async function readBody(req) {
   const category = S.str(src.category);
   if (!category) throw S.bad('category required');
 
-  const rawRecipe = Array.isArray(src.recipe) ? src.recipe : [];
+  const rawRecipe = toArray(src.recipe);
   if (rawRecipe.length > 100) throw S.bad('Recipe me max 100 lines');
 
   const recipe = [];
@@ -157,12 +173,42 @@ async function readBody(req) {
     }
   }
 
+  /* ---- photo: bilkul optional. Upload sab se aakhir me, taake koi doosri
+         validation fail ho to bekaar file storage me na jaye. ---- */
+  let image = existing ? existing.image || '' : '';
+
+  if (req.file) {
+    image = await saveImage(req.file);                    // nayi file aayi
+  } else if (S.bool(src.removeImage)) {
+    image = '';                                           // user ne hata di
+  } else if (src.image !== undefined) {
+    const url = S.str(src.image);
+    if (url && !/^https?:\/\//i.test(url)) throw S.bad('image ek valid URL honi chahiye');
+    image = url.slice(0, 500);                            // wahi purani URL wapas aayi
+  }
+
   return {
     name,
     nameKey: S.nameKey(name),
     price: round(price, 2),
     category,
+    image,
     recipe,
     isActive: src.isActive === undefined ? true : S.bool(src.isActive),
   };
+}
+
+// multipart me nested array nahi ja sakti, isliye frontend recipe ko
+// JSON.stringify kar ke bhejta hai. Dono shakal handle kar lo.
+function toArray(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      throw S.bad('recipe valid JSON array honi chahiye');
+    }
+  }
+  return [];
 }
